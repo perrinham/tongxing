@@ -173,3 +173,21 @@ npm run verify             # 上面几项的串链；四个闸门都在链里
   要打开城市评分面板得先注入 `travel_cities_v1`（`city.load()` 读的就是它）+ 点 `.city-row`。
 - **不要往 src 里塞 TEMP-DEBUG**：尺寸/`__hidpi__`/computed style 都能用 `agent-browser eval` 读到。
 - 后端本地：`npm run server`（:8787）；不可达时前端静默回退纯本地，不崩。
+
+## 微信开发者工具自动化调试
+
+- CLI：`/Applications/wechatwebdevtools.app/Contents/MacOS/cli`
+- 启动自动化：`cli open --project <path>` → `cli auto --project <path> --auto-port 9420`
+- 协议：WebSocket JSON-RPC（`ws://127.0.0.1:9420`），方法名：`App.reLaunch`（via `App.callWxMethod`）、
+  `App.getPageStack`、`App.captureScreenshot`；事件：`App.exceptionThrown`（运行时异常）
+- `miniprogram-automator` 0.12.1 协议已逆向确认，与 DevTools CLI 自动化端口一致
+
+## vendor.js Ms() 补丁（2026-09-19）
+
+- **根因**：Vue3 mp-weixin vendor.js 的 `Ms()` 函数（组件 prop 缓存 key 解析）缺少类型守卫，
+  `function Ms(e){if(!e)return;const[t,n]=e.split(",")}` 在 `e` 是 truthy 非字符串时崩溃
+  （ProfilePage 的组件 prop 组合触发此路径，其他 14 页不触发）。
+- **修复**：`scripts/patch-vendor.mjs` 在 `build:mp-weixin` 后自动修补 vendor.js 中 `Ms()`，
+  加 `typeof e !== "string"` 守卫。已链入 npm script（幂等，重复运行无副作用）。
+- **原因**：mp-weixin vendor.js 是 `@dcloudio/uni-mp-compiler` 编译产物，无法从源码层修复。
+- **验证**：15 页自动化全部 0 异常（含 ProfilePage）。
