@@ -40,25 +40,12 @@ import { createIdentity } from './lib/identity.mjs'
 import { CLOSE, OPCODE, acceptKey, createFrameParser, createWsConnection, encodeFrame } from './lib/ws.mjs'
 import { createHub } from './lib/hub.mjs'
 import { createTripsRouter } from './routes/trips.mjs'
+import { createHarness } from '../scripts/lib/test-harness.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
-let pass = 0
-let fail = 0
-
-function ok(cond, label, extra) {
-  if (cond) {
-    pass++
-    console.log('  ✓', label)
-  } else {
-    fail++
-    console.log('  ✗', label, extra !== undefined ? JSON.stringify(extra) : '')
-  }
-}
-
-function section(title) {
-  console.log('\n' + title)
-}
+const T = createHarness()
+const { ok, section } = T
 
 async function req(base, method, path, body, headers) {
   const res = await fetch(base + path, {
@@ -2273,5 +2260,5 @@ try {
   }
 }
 
-console.log(`\n===== 结果：${pass} 通过 / ${fail} 失败 =====\n`)
-process.exit(fail ? 1 : 0)
+console.log(`\n===== 结果：${T.pass} 通过 / ${T.fail} 失败 =====\n`)
+process.exit(T.fail ? 1 : 0)

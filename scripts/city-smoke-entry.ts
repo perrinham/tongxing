@@ -14,25 +14,12 @@
 import { mock, TEST_BASE } from './uni-mock'
 import { createPinia } from 'pinia'
 import { useCityStore } from '../src/stores/city'
+import { createHarness } from './lib/test-harness.mjs'
 
 type Device = 'A' | 'B'
 
-let pass = 0
-let fail = 0
-
-function ok(cond: unknown, label: string, extra?: unknown) {
-  if (cond) {
-    pass += 1
-    console.log('  ✓', label)
-  } else {
-    fail += 1
-    console.log('  ✗', label, extra === undefined ? '' : JSON.stringify(extra))
-  }
-}
-
-function section(title: string) {
-  console.log('\n' + title)
-}
+const H = createHarness()
+const { ok, section } = H
 
 // 各自一个 pinia = 各自一个 store 实例，否则 sharedGuides / passports 会被互相覆盖。
 const piniaA = createPinia()
@@ -515,5 +502,5 @@ try {
 ok(noAuthMsg === '尚未登录', '未登录时 fetchMyCloud 抛「尚未登录」（不会被显示成云端没记录）')
 
 // ────────────────────────────────────────────────────────────────────────
-console.log(`\n===== 城市足迹结果：${pass} 通过 / ${fail} 失败 =====`)
-if (fail > 0) process.exit(1)
+console.log(`\n===== 城市足迹结果：${H.pass} 通过 / ${H.fail} 失败 =====`)
+if (H.fail > 0) process.exit(1)

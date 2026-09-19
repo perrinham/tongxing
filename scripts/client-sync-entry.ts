@@ -20,25 +20,12 @@ import { encodeHlc, cmpHlc, recordHlc, createHlc } from '../src/services/hlc'
 import { MERGE_META_KEYS, mergeRecord } from '../src/services/lww'
 import { identityValid, loginErrorText } from '../src/services/identity'
 import { backoffDelay, toWsUrl } from '../src/services/realtime'
+import { createHarness } from './lib/test-harness.mjs'
 
 type Device = 'A' | 'B' | 'C'
 
-let pass = 0
-let fail = 0
-
-function ok(cond: unknown, label: string, extra?: unknown) {
-  if (cond) {
-    pass += 1
-    console.log('  ✓', label)
-  } else {
-    fail += 1
-    console.log('  ✗', label, extra === undefined ? '' : JSON.stringify(extra))
-  }
-}
-
-function section(title: string) {
-  console.log('\n' + title)
-}
+const H = createHarness()
+const { ok, section } = H
 
 const A = useTripStore(createPinia())
 const B = useTripStore(createPinia())
@@ -1098,5 +1085,5 @@ as('A').stopRealtime()
 as('B').stopRealtime()
 ok(A.realtime.status === 'stopped' && B.realtime.status === 'stopped', '停止后状态回到 stopped')
 
-console.log(`\n===== 客户端同步结果：${pass} 通过 / ${fail} 失败 =====\n`)
-process.exit(fail ? 1 : 0)
+console.log(`\n===== 客户端同步结果：${H.pass} 通过 / ${H.fail} 失败 =====\n`)
+process.exit(H.fail ? 1 : 0)

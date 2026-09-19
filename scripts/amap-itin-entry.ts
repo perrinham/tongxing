@@ -11,26 +11,13 @@ import { mock } from './uni-mock'
 import { createPinia } from 'pinia'
 import { generateItineraryAsync, generateItinerary } from '../src/utils/itinerary'
 import { isKnownCity } from '../src/data/poi'
+import { createHarness } from './lib/test-harness.mjs'
+
+const H = createHarness()
+const { ok, section } = H
 
 // uni.request 走 uni-mock 的 fetch 桥，但只 rewrite 本地后端地址 ——
 // 高德 restapi.amap.com 不在 rewrite 范围内，天然直连真 API。
-let pass = 0
-let fail = 0
-
-function ok(cond: unknown, label: string, extra?: unknown) {
-  if (cond) {
-    pass += 1
-    console.log('  ✓', label)
-  } else {
-    fail += 1
-    console.log('  ✗', label, extra === undefined ? '' : JSON.stringify(extra))
-  }
-}
-
-function section(title: string) {
-  console.log('\n' + title)
-}
-
 mock.useDevice('A')
 
 const BASE_INPUT = {
@@ -115,5 +102,5 @@ ok(
 mock.setOfflineAll(false)
 
 // ────────────────────────────────────────────────────────────────────────
-console.log(`\n===== 高德在线生成结果：${pass} 通过 / ${fail} 失败 =====`)
-if (fail > 0) process.exit(1)
+console.log(`\n===== 高德在线生成结果：${H.pass} 通过 / ${H.fail} 失败 =====`)
+if (H.fail > 0) process.exit(1)
