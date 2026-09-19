@@ -1,0 +1,175 @@
+:root,
+page {
+  /* ── iOS 系统底色 ──
+     页面底 = systemGroupedBackground (#F2F2F7)；
+     卡片 = 白，无描边无投影（iOS 分组列表的扁平质感）。 */
+  --bg-page: #F2F2F7;
+  --bg-card: #FFFFFF;
+  --bg-subtle: #E9E9EB;
+  --bg-sunken: #E3E3E8;
+
+  /* ── iOS 文字层级（label / secondaryLabel / tertiaryLabel）── */
+  --text-primary: #1C1C1E;
+  --text-secondary: #66666E;
+  --text-tertiary: #9C9CA1;
+  --text-inverse: #FFFFFF;
+
+  /* ── 品牌绿：保留项目识别，向 iOS systemGreen 靠拢 ── */
+  --brand: #1FA470;
+  /* 压深到 #12724F（原 #15795A）是为了让它和另外两个 -deep 用**同一个口径**：
+     按最差浅底 --bg-subtle 反推，Y ≤ 0.14244。原值压 bg-subtle 只有 4.42:1，
+     虽然当前没有一处这么用，但「-deep 在任何浅底上都安全」这条不变式值得是真的。 */
+  --brand-deep: #12724F;
+  --brand-soft: #E4F5EE;
+  --brand-softer: #F1FAF6;
+
+  /* ── 语义色的「填充态」与「文字态」是两套值 ───────────────────
+     下面 brand / accent / warn 的**基色是照着填充设计的**：条形、圆点、整块按钮底。
+     它们的明度都偏高，直接拿去做浅底上的小字（11~15px）会掉到 2.85~3.27:1，
+     也就是「看得见、但费劲」—— 不报错，只是糊。所以每个语义色配一个 `-deep`：
+
+       角色            用哪个         实测（压白底 / 压 --bg-page）
+       ─────────────────────────────────────────────────────────
+       条形·圆点·图标   基色            不作为文字，无对比度要求
+       浅底上的文字     -deep           ≥ 4.74:1，过 AA
+       实心控件底       基色 + 白字      3.18~3.27:1，见文末「已知取舍」
+
+     **规则：填充和图形用基色（要鲜亮），浅底上的文字一律用 -deep（要可读）。**
+     例外只有两处，都写在 README 的「已知取舍」里：实心按钮的白字、SVG 图标。 */
+  /* -deep 的取值口径：不按「好看」挑，按**最差底色**反推 ——
+     文字实际会落在白卡 / --bg-page / --bg-subtle(#E9E9EB) 三种浅底上，
+     取最深的 --bg-subtle 作为下界，要求 Y ≤ 0.14244（= 0.866/4.5 − 0.05）。
+     这样 -deep 在任何浅底上无条件过 AA，不用逐处再验。 */
+  --accent: #E8714A;
+  --accent-deep: #AB3D07;   /* 白 6.17 / 页面 5.53 / bg-subtle 5.09 / accent-soft 5.45 */
+  --accent-soft: #FDEEE7;
+
+  --warn: #C77E1A;
+  --warn-deep: #91590A;     /* 白 5.77 / 页面 5.28 / bg-subtle 4.76 / warn-soft 5.25 */
+  --warn-soft: #FDF3E1;
+
+  /* iOS systemRed 调稳（浅色底上的可读性）
+     取 #B01F16 而不是 #E03B30：后者压白底只有 4.34:1 —— 差 0.16 不到 AA 4.5，
+     而且它同时担任「白底上的红字」和「白字按钮的底」两种角色，双向都差一点，
+     属于最容易漏掉的「看着没问题、算一下差一点」。
+     按同一口径（最差底色 --bg-subtle）反推，再留一点余量：
+       白 6.88 / 页面 6.16 / bg-subtle 5.67 / danger-soft 6.01 / 白字压它 6.88。
+     顺带把「餐饮 ↔ 危险红」的 ΔE 从 21.9 抬到 27.7 —— 原来那一对正卡在
+     分类色/语义色 22 的线上，调深红反而把它解开了。 */
+  --danger: #B01F16;
+  --danger-soft: #FDECEA;
+
+  /* ── iOS 分隔线（separator / opaqueSeparator）── */
+  --line: #E5E5EA;
+  --line-strong: #D1D1D6;
+
+  --radius-sm: 10px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+
+  /* ── 扁平化 ──
+     iOS 背景是均匀的一整块灰：没有顶部辉光、没有渐变、没有彩色投影。
+     原先历史遗留的 `--brand-grad` / `--brand-grad-soft` / `--accent-grad` / `--page-glow`
+     以及 `--shadow-brand` / `--shadow-soft` 已全部删除 —— 页面重写完后已确认零引用。
+     以后**不要再加渐变类令牌**：颜色只用来编码信息（分类 / 状态 / 收支方向）。
+
+     保留 `--shadow-lift`：只给「分享海报预览图」用（浮起的图片，iOS 的图卡也确实带影）。 */
+
+  /* 发丝描边：iOS separator 是 0.33px 黑 @29%，这里取浅色底上的等价物 */
+  --hairline: rgba(60, 60, 67, 0.1);
+  --hairline-strong: rgba(60, 60, 67, 0.18);
+
+  /* ── 阴影：iOS 卡片靠「灰底上的白」分层，不靠投影 ──
+     只保留极淡的一层兜底（分段控件的滑块会用它）。 */
+  --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.02);
+  --shadow-lift: 0 10px 34px rgba(0, 0, 0, 0.1);
+
+  /* 缓动：iOS 常用的标准减速曲线 */
+  --ease-out: cubic-bezier(0.25, 1, 0.5, 1);
+  --dur: 0.38s;
+
+  --tabbar-h: 56px;
+  --navbar-h: 52px;
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-top: env(safe-area-inset-top, 0px);
+
+  --font-sans: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* ── 文字三级灰：为什么 `--text-tertiary` 过不了 AA，以及为什么不动它 ──
+   实测（压白底 / 压 --bg-page #F2F2F7）：
+     --text-primary   #1C1C1E   16.7 / 15.3  ✓
+     --text-secondary #66666E    5.7 /  5.2  ✓
+     --text-tertiary  #9C9CA1    2.7 /  2.5  ✗ 低于 AA 4.5
+
+   这不是配错色，是**数学上不可能**：要在白底上过 4.5:1，文字明度必须压到
+   Y ≤ 0.183，而 `--text-secondary` 已经是 Y = 0.135 —— 三级灰全部合格所需的三个
+   明度点根本排不下。参照 Apple 自己（`#3C3C43` 按 100/60/30% 叠白底）：
+   secondaryLabel ≈ 3.5:1、tertiaryLabel ≈ **1.9:1** —— 苹果的第三级比我们还浅。
+
+   所以层级本身是有意保留的，别去「顺手调亮」它：`--text-tertiary` 的职责就是
+   「存在但不抢注意力」的辅助说明（单位、脚注、占位提示、行尾时间）。
+   它的用法已由 `npm run contrast:audit` 全量登记（第五节），要改是逐处的设计决定。
+
+   一条反例，说明「顺手续调」会真的坏事：底部 tab 的未选中态若从 tertiary 提到
+   secondary（5.7:1），它的明度 Y = 0.135 会**和选中态 `--brand-deep` 的 Y = 0.127
+   几乎相同**（实测差 0.0073）—— 选中/未选中只能靠色相区分，可用性反而下降。所以未选中保持 tertiary，
+   靠「绿 vs 灰」的色差表明状态，选中态压深到 brand-deep 保住文字可读。
+   （这两个 Y 值随令牌走，`contrast:audit` 第五节的末尾会重算并打印，别在这里抄快照。） */
+
+/* ── 分类色板 ──────────────────────────────────────────────
+   用于账单分类的图标 / 条形 / 标签。**它是一套独立的色板，不复用语义色。**
+
+   为什么重挑：旧色板有三对跟语义色逐字节相同 ——
+     `--cat-food`(#E8714A)      = `--accent`
+     `--cat-ticket`(#1FA470)    = `--brand`        ← 最严重，分类色抢走了品牌色
+     `--cat-entertain`(#C77E1A) = `--warn`
+   后果是「门票」在界面上和底栏选中态、按钮、悬浮按钮是同一个绿，品牌色被稀释；
+   而结算页上「餐饮」的橙和「欠款」的橙也是同一个色。
+
+   新色板由约束搜索选出（`node scripts/search-palette.mjs`，可复跑复核），满足：
+     C1  每个分类色 vs 5 个语义色的 ΔE ≥ 22
+     C2  分类色两两之间 ΔE ≥ 20   （苹果自家最挤的一对 blue↔indigo 是 19.6，所以这条是照苹果的标准定的）
+     C3  分类色压在自己的浅底上对比度 ≥ 3.0:1（WCAG 1.4.11 非文本/UI 组件线）
+
+   实测结果（对照旧色板）：
+     离最近语义色的距离   0.0 → 22.0
+     分类色两两最挤       21.9 → 26.0
+     最低对比度           2.38 → 3.09
+
+   ⚠️ 三条已知边界，改色前先读：
+   1. **`餐饮` 只能在暖色带里，而那里已经挤着 `--accent`(h15)、`--danger`(h4)、`--warn`(h35)。**
+      实测把 `--warn` 挪到黄色带也救不了 —— C1 抬到 25 就是无解，
+      因为「橙」和「红/鲑红」的色距天生近。所以 `--cat-food` 取的是暖色带里
+      **既够深（过 3:1）又够偏黄（离红够远）** 的那个点，ΔE 22 已是当前色池的上限。
+   2. **`其他`(#7A7A80) 是中灰，对比度只有 3.71。** 灰没有色相可用，再深就变成「黑」会抢正文。
+   3. **分类色只当图标 / 条形填充，永远不当文字色。** 最低 3.09:1 只够 UI 组件线，
+      不够正文的 AA 4.5:1。所以：
+        · `.bd-amt` 这类数字用 `--text-*`；
+        · 记账页的分类块把分类色**只挂在图标上**（图标是图形，3:1 线），
+          12px 标签走 `--text-primary` —— 挂在按钮上会连标签一起染色。
+      「每个分类再配一套 -deep」这条路已经试算过并否掉了：压暗到能过 4.5:1 之后，
+      「餐饮」的 #B9470A 和 `--accent-deep` #AB3D07 的 ΔE 只有 **3.9** ——
+      等于让分类色变成「应付」的橙，正是第一节要防的那件事。
+      暖色带里塞不下第二个「深橙」，这是和上面第 1 条同一个物理限制。 */
+:root,
+page {
+  --cat-food: #E8590C;
+  --cat-food-bg: #FCEBE2;
+  --cat-transport: #0B6BCB;
+  --cat-transport-bg: #E2EDF9;
+  --cat-stay: #5856D6;
+  --cat-stay-bg: #EBEBFA;
+  /* 门票：从品牌绿改成青。青色相 h190 离品牌绿 h157 有 33°，是「不撞品牌绿」的最近可用点 */
+  --cat-ticket: #0E8FA8;
+  --cat-ticket-bg: #E2F2F5;
+  --cat-shopping: #D6336C;
+  --cat-shopping-bg: #FAE7ED;
+  --cat-entertain: #9333C9;
+  --cat-entertain-bg: #F2E7F9;
+  --cat-other: #7A7A80;
+  --cat-other-bg: #EFEFF0;
+}

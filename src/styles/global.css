@@ -1,0 +1,619 @@
+/* 全局盒模型。
+   ⚠️ WXSS **不支持通用选择器 `*`** —— wcsc 会直接报 `unexpected token \`*\``，
+   而开发者工具只把它显示成「编译 .wxss 文件错误，错误信息如上」，
+   文件与行列号都不给（只在模拟器控制台里），所以这里只能显式列出内置组件标签。
+   漏掉的标签会退回 content-box，表现为 `width:100%` + padding 撑破容器，
+   所以宁可列全；以后加自定义组件时，若它自带布局约束，也把自己的标签补进来。 */
+/* #ifndef H5 */
+page,
+view, scroll-view, swiper, swiper-item, movable-area, movable-view,
+cover-view, cover-image, icon, text, rich-text, progress,
+button, checkbox-group, checkbox, form, input, label,
+picker, picker-view, radio-group, radio, slider, switch, textarea, editor,
+navigator, functional-page-navigator,
+image, video, camera, live-player, live-pusher, audio, map,
+canvas, open-data, web-view, ad, official-account, open-container,
+page-meta, navigation-bar, match-media, keyboard-accessory, slot {
+  box-sizing: border-box;
+}
+/* #endif */
+
+/* #ifdef H5 */
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+/* #endif */
+
+page,
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg-page);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior-y: none;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+/* ⚠️ 必须同时重置 `uni-button`。
+   uni-app 在 H5 端会把模板里的 `<button>` 编译成自定义元素 `<uni-button>`，
+   浏览器不认识这个标签，所以下面那条 `button {}` **匹配不到它** ——
+   平台默认样式（灰色底、圆角、居中、描边）会直接透出来。
+   症状就是：同一个按钮在 H5 上带一圈莫名其妙的绿框，而在小程序里是干净的，
+   两端长得不一样，排查时又很难想到是标签名变了。
+   `uni-button` 这个选择器在小程序端永远不会命中，留着无害。 */
+button,
+uni-button {
+  font-family: inherit;
+  font-size: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+  color: inherit;
+  padding: 0;
+  margin: 0;
+  line-height: normal;
+  text-align: inherit;
+}
+
+/* uni-button 的默认描边是画在 ::after 上的，只重置元素本身盖不掉 */
+button::after,
+uni-button::after {
+  border: none;
+  display: none;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  border: none;
+  outline: none;
+  background: none;
+  width: 100%;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--text-tertiary);
+}
+
+ul,
+ol,
+li {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+h1,
+h2,
+h3,
+h4,
+p {
+  margin: 0;
+  font-weight: 500;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* iOS 的页面是「平的」：没有顶部辉光、没有渐变背景，
+   整个屏幕就是一块 systemGroupedBackground。 */
+.shell {
+  max-width: 480px;
+  margin: 0 auto;
+  min-height: 100vh;
+  background: var(--bg-page);
+  position: relative;
+  overflow-x: hidden;
+}
+.page {
+  padding-bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 20px);
+  min-height: 100vh;
+}
+
+.page-body {
+  padding: 0 16px;
+}
+
+/* ── 卡片：iOS 分组列表质感 ──
+   白底 + 圆角，直接坐在系统灰上，无描边无投影 —— 分层只靠底色差。 */
+.card {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  padding: 16px;
+}
+
+/* ══════════════════════════════════════════════════════════════
+   iOS 分组列表（Inset Grouped List）
+   ──────────────────────────────────────────────────────────────
+   这是 iOS 设置类界面最核心的版式：一块白色圆角卡片里放若干行，
+   行与行之间是一条**左侧内缩**的发丝分隔线（分隔线从文字起始处开始，
+   不顶到卡片边），第一行上沿与最后一行下沿没有线。
+
+   为什么不用「一行一张卡」：那是卡片流的做法，每张卡都要有自己的圆角
+   和间距，页面上会堆出大量短横线和空白，视觉噪音远高于信息量。
+   分组列表把「一块区域」收成一个整体，扫描成本低得多。
+
+   ⚠️ 分隔线用 `.list-row + .list-row::after` 会用到伪元素 —— 小程序端
+   支持 ::after，但为了让「行高、缩进量」有单一来源，这里改为在模板里
+   显式渲染 <div class="list-sep" />。多一个节点换来的是两端表现一致
+   且缩进量可控（见下面 .list-sep 的注释）。
+   ══════════════════════════════════════════════════════════════ */
+
+.list {
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+/* 分组小标题：iOS 是 13px 次级灰、左缩进 16px，
+   且**不在一张卡里**，它是卡片外面的抬头。
+
+   ⚠️ 这里只给纵向内边距，横向留白交给外层容器（`.page-body` 的 16px）。
+   早先这里写的是 `padding: 24px 20px 8px`，但它本身就在 `.page-body` 里，
+   于是左右各多出 20px —— 标题比卡片内容右缩了 36px，整页的左边线全对不齐。
+   「缩进只由一层负责」是个必须守住的约定，否则每加一层容器就漂一次。 */
+.list-head {
+  padding: 22px 0 7px;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  letter-spacing: 0.2px;
+}
+
+/* 分组脚注：解释性文字，同样在卡片外面 */
+.list-foot {
+  padding: 7px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-tertiary);
+}
+
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 11px 16px;
+  transition: background 0.12s ease;
+}
+
+.list-row:active {
+  background: var(--bg-subtle);
+}
+
+/* 分隔线：左边留 16px 空白 —— 与行内容左对齐。
+   iOS 里如果一行左侧有图标，分隔线会缩到图标右边，这里统一用 16px，
+   因为本项目的行大多没有前导图标。 */
+.list-sep {
+  height: 1px;
+  margin-left: 16px;
+  background: var(--line);
+}
+
+/* 可选：分隔线下方再加一段说明（例如成员行的「付了…该担…」） */
+.list-row.stack {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 3px;
+}
+
+/* ── 三段式统计条 ──
+   iOS 用「大数字 + 小单位」表达数量，数字 22/600 与单位 12/次级灰同基线。
+   分隔不用竖线（那太像表格），靠等宽分布自然分开。 */
+.stat3 {
+  display: flex;
+  align-items: center;
+  padding: 14px 0;
+}
+
+.stat3 > .stat {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 3px;
+}
+
+.stat3 .stat-num {
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: -0.4px;
+  color: var(--text-primary);
+}
+
+.stat3 .stat-unit {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* 纵向变体：数值与单位上下排。
+   ⚠️ 什么时候必须用它：数值本身较长（例如「CNY1949.84」）时，
+   横向排布会让「数值 + 单位」超出 1/3 的列宽，flex 的默认行为是把单位
+   逐字折行 —— 屏幕上就会出现「人\n均」这种竖排的两个字。
+   纵向排布把两行的宽度需求降到 max(数值, 单位)，就不会再挤爆。 */
+.stat3.col > .stat {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+}
+
+.stat3.col .stat-num {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.stat3.col .stat-unit {
+  font-size: 12px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+/* ── 分段控件（UISegmentedControl）──
+   凹槽底 + 白色滑块。iOS 的选中态是「白色浮块 + 轻微投影」，
+   而不是给选中项换一个彩色底 —— 后者会把控件变成一排按钮。 */
+.seg {
+  display: flex;
+  padding: 2px;
+  border-radius: 10px;
+  background: var(--bg-sunken);
+}
+
+.seg-item {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: background 0.18s var(--ease-out), color 0.18s ease;
+}
+
+.seg-item.active {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+
+/* ── 药丸标签（分类 / 状态）──
+   iOS 的 tinted label：极浅的同色底 + 同色文字，不加描边。 */
+.tint {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+/* 中性的系统标签（灰底深灰字），用于「已打卡」这类无色彩语义的状态 */
+.tint.neutral {
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+}
+
+/* 区块标题：与 .list-head 同口径 —— 只给纵向留白，横向由容器负责。 */
+.sec-title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  padding: 24px 0 8px;
+}
+
+/* iOS 分组头：大而重、无装饰 */
+.sec-title h2 {
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: var(--text-primary);
+}
+
+.sec-title .sec-hint {
+  font-size: 13px;
+  color: var(--text-tertiary);
+}
+
+.muted {
+  color: var(--text-tertiary);
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum';
+}
+
+.row {
+  display: flex;
+  align-items: center;
+}
+
+.row-between {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.gap-8 { gap: 8px; }
+.gap-12 { gap: 12px; }
+.grow { flex: 1; min-width: 0; }
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── 主按钮：iOS 填充按钮（纯色、无彩色投影）── */
+.btn-primary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 50px;
+  border-radius: 14px;
+  background: var(--brand);
+  color: var(--text-inverse);
+  font-size: 17px;
+  font-weight: 600;
+  transition: transform 0.14s var(--ease-out), opacity 0.14s ease;
+}
+
+.btn-primary:active {
+  transform: scale(0.98);
+  opacity: 0.9;
+}
+
+/* 禁用态：底色压深表示「按不动」，但标签仍要看得见 ——
+   tertiary 压 bg-sunken 只有 2.14:1，读起来是「按钮坏了」；secondary 是 4.45:1。
+   （WCAG 1.4.3 对 inactive 组件是豁免的，这里只是不为难用户。） */
+.btn-primary[disabled] {
+  background: var(--bg-sunken);
+  color: var(--text-secondary);
+  opacity: 1;
+}
+
+/* 禁用态的**统一兜底**（不只是 .btn-primary）。
+   为什么需要它：uni 内置的 `button[disabled]` 是 `#F7F7F7` 底 + `rgba(0,0,0,0.3)` 字
+   —— 压白卡只有 **2.1:1**，而且它会盖掉我们自己的按钮样式。
+   「逐个按钮补 `[disabled]`」这条路线已被证明不可靠：补了 5 处（.btn-primary / .key.save /
+   .ma / .tool / .demo-btn）之后，运行时体检仍在 MembersPage 的「添加」按钮上量到 2.1:1。
+
+   选择器必须写到**同等特异性**才压得住：uni 用的是
+   `uni-button[disabled][type="default"], uni-button[disabled]:not([type])`（0,2,1），
+   只写 `uni-button[disabled]`（0,1,1）会输 —— 实测就是这么输的。
+   所以下面把「有 type / 无 type」两种都列全，且本文件在 uni 的样式之后加载。
+
+   故意**不写 opacity**：`.ma` / `.tool` / `.demo-btn` 各自用 opacity 表达禁用，
+   在这里覆盖会改掉它们的外观。这条只统一「底色压灰 + 标签仍然看得清」。 */
+uni-button[disabled][type="default"],
+uni-button[disabled]:not([type]),
+button[disabled][type="default"],
+button[disabled]:not([type]) {
+  background: var(--bg-sunken);
+  color: var(--text-secondary);
+}
+
+/* 次级：iOS 的「灰色填充按钮」 */
+.btn-ghost {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 44px;
+  padding: 0 16px;
+  border-radius: 12px;
+  background: var(--bg-subtle);
+  color: var(--text-primary);
+  font-size: 15px;
+  border: none;
+  transition: background 0.15s ease;
+}
+
+.btn-ghost:active {
+  background: var(--bg-sunken);
+}
+
+/* 三级：iOS 的「tinted 按钮」—— 同色浅底 + 同色文字，
+   用于「添加城市」「分享」这类不该抢主视觉的动作。 */
+.btn-tint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 17px;
+  background: var(--brand-soft);
+  color: var(--brand-deep);
+  font-size: 14px;
+  font-weight: 600;
+  transition: opacity 0.15s ease;
+}
+
+.btn-tint:active {
+  opacity: 0.6;
+}
+
+.btn-text {
+  /* 14px 文字 → 必须 -deep：#1FA470 压页面底只有 2.85:1，#15795A 是 4.81:1 */
+  color: var(--brand-deep);
+  font-size: 14px;
+  font-weight: 500;
+  padding: 4px 0;
+}
+
+/* ── 输入控件 ──
+   iOS 的表单输入是「浅灰圆角块」，没有描边；聚焦时不发光、不换色。 */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 32px;
+  padding: 0 13px;
+  border-radius: 16px;
+  background: var(--bg-subtle);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.chip.active {
+  background: var(--brand);
+  color: #fff;
+  font-weight: 500;
+}
+
+.field {
+  padding: 12px 0;
+}
+
+.field-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.field-input {
+  height: 44px;
+  padding: 0 14px;
+  border-radius: 12px;
+  background: var(--bg-sunken);
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  transition: background 0.15s ease;
+}
+
+.field-input:focus-within {
+  background: var(--bg-subtle);
+}
+
+.divider {
+  height: 1px;
+  background: var(--line);
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
+
+.slide-enter-active,
+.slide-leave-active {
+  transition: transform 0.24s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.slide-enter-from,
+.slide-leave-to {
+  transform: translateY(100%);
+}
+
+/* 重叠头像组：第一个完整可见，后面的依次被压住，避免文字互相遮挡 */
+.avatar-stack {
+  display: flex;
+  align-items: center;
+}
+
+/* 头像堆叠：每个头像左移 8px 叠在一起，越靠前层级越高。
+   ⚠️ 这里**不能**写 `.avatar-stack > *` —— 通用选择器在 WXSS 里是非法的
+   （wcsc: `error at token \`*\``），而且 H5 与小程序下「直接子节点」根本不是同一种东西：
+   小程序里是组件宿主标签 `<app-avatar>`，H5 里是组件根元素本身。
+   所以统一套一层 `.av`，两边语义一致、选择器也合法。 */
+.avatar-stack > .av {
+  position: relative;
+  margin-right: -8px;
+  flex-shrink: 0;
+  /* 套一层后它自己是 flex item；再让内部头像也走 flex，
+     避免 inline-flex 基线留出多余行高 */
+  display: flex;
+}
+
+.avatar-stack > .av:last-child {
+  margin-right: 0;
+}
+
+.avatar-stack > .av:nth-child(1) { z-index: 6; }
+.avatar-stack > .av:nth-child(2) { z-index: 5; }
+.avatar-stack > .av:nth-child(3) { z-index: 4; }
+.avatar-stack > .av:nth-child(4) { z-index: 3; }
+.avatar-stack > .av:nth-child(5) { z-index: 2; }
+.avatar-stack > .av:nth-child(n + 6) { z-index: 1; }
+
+/* 历史包袱已清空：
+   `.grad-text`（品牌渐变标题）与 `.eyebrow`（彩色小标签）这两个类随本次 iOS 改版一起删掉了
+   —— 16 个页面全部重写后已确认零引用（模板、`:class` 绑定、pages.json 都查过）。
+   它们原本的存在理由都是「装饰」，与「颜色只编码信息」这条规则直接冲突。
+   大标题没有全局类，各页自己写（如 ExpensePage 的 `.sum-value` 34/700 纯色）；
+   不要恢复渐变文字。 */
+
+/* 进场动画 */
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.rise {
+  animation: rise var(--dur) var(--ease-out) both;
+}
+
+.rise-1 { animation-delay: 0.04s; }
+.rise-2 { animation-delay: 0.1s; }
+.rise-3 { animation-delay: 0.16s; }
+.rise-4 { animation-delay: 0.22s; }
+
+/* 无障碍：尊重系统的「减弱动态效果」设置。仅下发 H5。
+   ⚠️ 原因是里面的 `*`（WXSS 不支持通用选择器），**不是**这个媒体特性本身 ——
+   用 wcsc 实测过：`@media (prefers-reduced-motion: reduce){.a{color:red}}` 是能编译过的，
+   加上 `*,*::before,*::after` 才报错。想覆盖「所有元素」就只能用 `*`，
+   而小程序也没有读取该系统设置的途径（无 `hover-class` 之外的等价物），
+   所以整段只给 H5。 */
+/* #ifdef H5 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-delay: 0ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+/* #endif */

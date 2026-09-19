@@ -1,0 +1,31 @@
+{
+  "name": "同行",
+  "appid": "wx6e2fd2086d59e653",
+  "description": "行程规划与同行分摊 · 微信小程序版",
+  "versionName": "1.0.0",
+  "versionCode": "100",
+  "transformPx": false,
+  "mp-weixin": {
+    "appid": "wx6e2fd2086d59e653",
+    "setting": {
+      "urlCheck": false,
+      "es6": true,
+      "minified": true,
+      "postcss": true
+    },
+    "permission": {
+      "scope.userLocation": {
+        "desc": "用于在地图上展示行程地点、规划景点之间的路线"
+      }
+    },
+    "requiredPrivateInfos": [
+      "getLocation",
+      "chooseLocation"
+    ]
+  },
+  "h5": {
+    "router": {
+      "mode": "hash"
+    }
+  }
+}

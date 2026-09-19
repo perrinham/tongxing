@@ -1,0 +1,28 @@
+{
+  "entryPagePath": "pages/WelcomePage",
+  "pages": [
+    { "path": "pages/WelcomePage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/ItineraryPage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/TripCreatePage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/TripGeneratePage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/ExpensePage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/ExpenseEditPage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/ItemEditPage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/SettlePage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/MembersPage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/ProfilePage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/MapPage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/CityMapPage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/MyGuidesPage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/SyncPage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/DiscoverPage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/TripViewPage", "style": { "navigationStyle": "custom" } }
+  ],
+  "globalStyle": {
+    "navigationStyle": "custom",
+    "navigationBarTextStyle": "black",
+    "navigationBarTitleText": "同行",
+    "navigationBarBackgroundColor": "#F2F2F7",
+    "backgroundColor": "#F2F2F7"
+  }
+}
