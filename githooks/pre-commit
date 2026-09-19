@@ -1,0 +1,17 @@
+#!/bin/sh
+# 提交前闸门：跑完整验证链。
+# 启用：npm run hooks:install（把 core.hooksPath 指向本目录，无需 husky 依赖）。
+# 跳过：git commit --no-verify（某个提交只想推草稿时用，常驻豁免是个信号）。
+set -eu
+
+cd "$(git rev-parse --show-toplevel)"
+
+echo "── pre-commit: npm run verify"
+
+if npm run verify; then
+  echo "── pre-commit: 验证链通过 ✓"
+  exit 0
+else
+  echo "── pre-commit: 验证链失败 ✗  请先修复；若要强制提交请用 --no-verify"
+  exit 1
+fi

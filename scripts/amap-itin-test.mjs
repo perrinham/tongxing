@@ -11,6 +11,9 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { loadEnvLocal } from './lib/env.mjs'
+
+loadEnvLocal(join(dirname(fileURLToPath(import.meta.url)), '..'))
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const root = join(__dirname, '..')

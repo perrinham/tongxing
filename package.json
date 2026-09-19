@@ -10,6 +10,7 @@
     "build:h5": "node node_modules/@dcloudio/vite-plugin-uni/bin/uni.js build",
     "typecheck": "node node_modules/vue-tsc/bin/vue-tsc.js --noEmit",
     "server": "node server/index.mjs",
+    "hooks:install": "node scripts/hooks-install.mjs",
     "server:smoke": "node server/smoke.mjs",
     "client:smoke": "node scripts/client-sync-test.mjs",
     "city:smoke": "node scripts/city-smoke-test.mjs",

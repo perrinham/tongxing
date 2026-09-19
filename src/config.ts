@@ -8,7 +8,16 @@
  * 添加：https://restapi.amap.com
  * （manifest.json 里已设 urlCheck:false，开发期用微信开发者工具的「不校验合法域名」即可直接试）
  */
-export const AMAP_WEB_KEY = String(import.meta.env.VITE_AMAP_WEB_KEY || '')
+function amapKeyFromEnv(): string {
+  const vite = import.meta.env?.VITE_AMAP_WEB_KEY
+  if (vite) return String(vite)
+  // Node 测试环境（esbuild 打包，没有 import.meta.env）回退到进程环境变量。
+  // 浏览器构建里 Vite 会把上面那行替换成字面量，走不到这里。
+  const procEnv = (globalThis as { process?: { env?: Record<string, string> } }).process?.env
+  return String(procEnv?.VITE_AMAP_WEB_KEY ?? '')
+}
+
+export const AMAP_WEB_KEY = amapKeyFromEnv()
 
 /** 是否启用高德（key 为空时自动降级为本地点位库，保证离线可用） */
 export const AMAP_ENABLED = AMAP_WEB_KEY.trim().length > 0
