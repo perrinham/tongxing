@@ -8,18 +8,36 @@
 |---|---|---|
 | 类型检查 + 小程序构建 | `npm run verify` | 0 错误，构建 DONE（13 个页面） |
 | 后端端到端测试 | `npm run server:smoke` | **340 通过 / 0 失败** |
-| 客户端同步流程测试 | `npm run client:smoke` | **149 通过 / 0 失败** |
-| 城市足迹 / 高德生成 | `npm run city:smoke` / `npm run amap:smoke` | **56 / 17 通过，0 失败** |
+| 客户端同步流程测试 | `npm run client:smoke` | **159 通过 / 0 失败** |
+| 城市足迹 / 高德生成 | `npm run city:smoke` / `npm run amap:smoke` | **65 / 17 通过，0 失败** |
 | 令牌防漂移 | `npm run check:tokens` | 通过（8 项断言 + 解析覆盖率；含 marker PNG 像素色与 `pages.json` 底色的同值校验） |
 | 文字对比度闸门 | `npm run contrast:audit` | 通过（45 条配对 + 七类断言 + 输入校验；另有 tertiary 清单只报告） |
 | 色板体检 | `npm run palette:audit` | 通过（分类色三条约束 **23.5 / 25.9 / 3.09:1**，**已进 `verify` 链并会判失败**） |
-| 高德 Web Service Key | 已写入 `src/config.ts` | 无需再填 |
+| 平台能力闸门 | `npm run check:platform` | 通过（`.self` / `inset:` / `fillStyle=var()` / `createSelectorQuery` 无 `.in` / `saveImageToPhotosAlbum` 无 H5 兜底 → 硬失败） |
+| 高德 Web Service Key | 真 key 已移入 `.env.local`（gitignore），`src/config.ts` 从 `import.meta.env` 读 | 克隆后自建 `.env.local`，空 key 自动降级本地库 |
 
 **验证链**（`npm run verify`，全在链里、都会有真实缺陷时返回非 0）：
 
 ```
-vue-tsc → check:tokens → contrast:audit → palette:audit → build:mp-weixin → wxss:lint → city:smoke
+vue-tsc → check:tokens → contrast:audit → palette:audit → check:platform → build:mp-weixin → wxss:lint → city:smoke
 ```
+
+## 工程基建轮：git + CI + 提交闸门 + 平台闸门 + 统一 harness（2026-09-19）
+
+把「验证全链只活在本地、靠人记得跑」这个最大隐患补成了机制：**项目从此有版本控制、有提交前闸门、有 CI**。
+
+| 项 | 结果 |
+|---|---|
+| 版本控制 | `git init` + 首次入库（192 文件）；`githooks/pre-commit` 跑 `npm run verify`（`core.hooksPath`，零依赖）；新机器 `npm run hooks:install` |
+| CI | `.github/workflows/ci.yml`：Node22 → npm ci → `fix:env` → verify → build:h5 → 三段离线 smoke（amap 真实接口默认关，配额） |
+| 环境修复脚本化 | `npm run fix:env`（幂等）：vue-router 软链 + esbuild 平台二进制补齐，原两条手工 hack 进脚本 |
+| 全局错误可见性 | `main.ts` `app.config.errorHandler` + `App.vue` `onError/onUnhandledRejection`，统一 `[app-err:…]` 前缀 |
+| 平台能力闸门 | `npm run check:platform` 进 verify 链；`<Transition>` 4 处静态 toast 为安全用法，警告级放行 |
+| 统一断言宏 | `scripts/lib/test-harness.mjs`：四段冒烟共用一份 `ok/section/pass/fail`（B3 有意不拆 2277 行单文件，sections 顺序共享状态） |
+
+顺带治了高德 key 入库问题：真 key 挪进 `.env.local`（`*.local` 已忽略），`src/config.ts` 从 `import.meta.env.VITE_AMAP_WEB_KEY` 读（esbuild 冒烟里 `import.meta.env` 不存在，用可选链 + `globalThis.process.env` 兜底）。`scripts/lib/env.mjs` 给 amap 真机段注入 key。
+
+细节与踩坑见 `memory/2026-09-19.md`。git 身份是仓库级占位（a1111），发布前记得改。
 
 ## UI 第 2 轮：分类色板重挑 + 海报画布静默裁切修复（2026-09-18）
 

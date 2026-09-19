@@ -6,6 +6,22 @@ uni-app 3（Vue3 + TS）行程规划与同行分摊 App，双端：**mp-weixin�
 
 - **`server/` 零改动**（用户明确要求）。前端改动不得引入后端接口变更。
 - 双端都要能构建：`npm run build:h5` 与 `npm run build:mp-weixin` 均须 DONE。
+- **高德 key 不进库**：真 key 在 `.env.local`（已被 `*.local` 忽略），入库的 `.env` 是空默认值。
+  `src/config.ts` 读 `import.meta.env.VITE_AMAP_WEB_KEY`，空则自动降级本地 6 城库。
+
+## 工程基建（2026-09-19 起）
+
+- **有 git 了**：提交前强制 `npm run verify`（`githooks/pre-commit` + `core.hooksPath`）。
+  新机器 clone 后跑一次 `npm run hooks:install`。嫌慢 `--no-verify` 跳过（常驻豁免=坏味道）。
+- **有 CI 了**：`.github/workflows/ci.yml`（Node22），推 GitHub 后自动跑 verify + build:h5 + 三段离线 smoke。
+- **环境修复**：`npm run fix:env`（幂等）——vue-router 软链 + esbuild 平台二进制补齐（原 README 两条手工 hack 脚本化）。
+  踩过：`node <esbuild-bin>` 会把原生二进制当 JS 跑；拷贝目录要用 `cpSync` 不是 `copyFileSync`。
+- **平台能力闸门**：`npm run check:platform`（已进 verify 链）——
+  `.self` / `inset:` / `canvas fillStyle=var()` / `createSelectorQuery` 无 `.in(` / `saveImageToPhotosAlbum` 无 H5 兜底 → 硬失败；
+  `<Transition>` → 警告（静态 toast 可，输入/受控弹层必须 CSS @keyframes，AppSheet 教训）。
+- **四段冒烟共用一份断言宏**：`scripts/lib/test-harness.mjs` 的 `createHarness()`（ok/section/pass/fail）。
+  新冒烟断言一律从这里取，别再在各自文件里重写一份 `let pass/fail`——「审计脚本各漂各的」是这项目的老病。
+- Node 版冒烟的未捕获异常/未处理拒绝默认就让进程非零退出，不用再造；UI 侧运行时错误看 `[app-err:…]` 前缀。
 
 ## 验证链（改完必跑）
 
@@ -14,13 +30,14 @@ npm run typecheck          # vue-tsc，0 错
 npm run check:tokens       # 令牌 ↔ canvas 字面值 / 位图 / pages.json 防漂移（8 项断言 + 解析覆盖率）
 npm run contrast:audit     # 文字对比度闸门（45 条配对 + 七类断言 + 输入校验）
 npm run palette:audit      # 色板体检：分类色三条约束，越界即返回非 0（23.5 / 25.9 / 3.09:1）
+npm run check:platform     # 平台能力闸门：.self / inset: / fillStyle=var() / createSelectorQuery 无 .in / saveImageToPhotosAlbum 无 H5 兜底
 npm run build:mp-weixin
 npm run wxss:lint          # 22 个 wxss
-npm run city:smoke         # 56 用例
-npm run verify             # 上面几项的串链；三个颜色闸门都在链里
+npm run city:smoke         # 65 用例
+npm run verify             # 上面几项的串链；四个闸门都在链里
 ```
 
-链的实际顺序：`vue-tsc → check:tokens → contrast:audit → palette:audit → build:mp-weixin → wxss:lint → city:smoke`。
+链的实际顺序：`vue-tsc → check:tokens → contrast:audit → palette:audit → check:platform → build:mp-weixin → wxss:lint → city:smoke`。
 另有 `npm run palette:search`（按约束穷举分类色候选）。
 **别再把审计脚本放在链外** —— `palette:audit` 曾经只打印不判定，等于一份没人看的报告，
 和「审计脚本写死快照」是同一个坑的两种形态。
