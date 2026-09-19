@@ -292,9 +292,7 @@ function goCreate() {
       </div>
     </template>
 
-    <Transition name="fade">
-      <div v-if="toast" class="toast">{{ toast }}</div>
-    </Transition>
+    <div v-if="toast" class="toast toast-fade">{{ toast }}</div>
 
     <AppSheet v-model="showPoster" title="结算海报">
       <PosterCanvas v-if="posterData" ref="posterRef" :data="posterData" @saved="onPosterSaved" @error="onPosterError" />
@@ -568,6 +566,13 @@ function goCreate() {
   border-radius: 20px;
   z-index: 200;
   white-space: nowrap;
+}
+.toast-fade {
+  animation: toast-in 0.25s ease both;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
 .page {

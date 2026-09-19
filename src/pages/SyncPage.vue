@@ -402,9 +402,7 @@ async function doJoin() {
       </p>
     </div>
 
-    <Transition name="fade">
-      <div v-if="toast" class="toast">{{ toast }}</div>
-    </Transition>
+    <div v-if="toast" class="toast toast-fade">{{ toast }}</div>
   </div>
 </template>
 
@@ -713,6 +711,13 @@ async function doJoin() {
   max-width: 90vw;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.toast-fade {
+  animation: toast-in 0.25s ease both;
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
 }
 
 .page {
