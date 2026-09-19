@@ -1,9 +1,16 @@
 <script setup lang="ts">
-import { onLaunch, onShow, onHide, onUnload } from '@dcloudio/uni-app'
+import { onLaunch, onShow, onHide, onUnload, onError, onUnhandledRejection } from '@dcloudio/uni-app'
 import { useTripStore } from '@/stores/trip'
 import { SYNC_ENABLED } from '@/config'
 
 const store = useTripStore()
+
+// 全局错误可见性（和 main.ts 的 app.config.errorHandler 配套）：
+// 统一挂 [app-err:…] 前缀，让「不报错、只是不对」这类静默失败至少有 console 痕迹，
+// 也方便日后接入线上日志时按前缀一次性聚合。onUnhandledRejection 仅 mp-weixin 支持，
+// H5 端无此回调（Vue 与 fetch 层错误由 errorHandler + onError 兜底）。
+onError((err) => console.error('[app-err:lifecycle]', err))
+onUnhandledRejection((err) => console.error('[app-err:unhandled-rejection]', err))
 
 onLaunch(() => {
   store.load()

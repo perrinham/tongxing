@@ -11,6 +11,8 @@
     "typecheck": "node node_modules/vue-tsc/bin/vue-tsc.js --noEmit",
     "server": "node server/index.mjs",
     "hooks:install": "node scripts/hooks-install.mjs",
+    "fix:env": "node scripts/fix-env.mjs",
+    "smoke:offline": "npm run server:smoke && npm run client:smoke && npm run city:smoke",
     "server:smoke": "node server/smoke.mjs",
     "client:smoke": "node scripts/client-sync-test.mjs",
     "city:smoke": "node scripts/city-smoke-test.mjs",
@@ -24,8 +26,9 @@
     "palette:search": "node scripts/search-palette.mjs",
     "palette:audit": "node scripts/check-palette.mjs",
     "contrast:audit": "node scripts/check-contrast.mjs",
+    "check:platform": "node scripts/check-platform.mjs",
     "test": "npm run server:smoke && npm run client:smoke && npm run city:smoke && npm run amap:smoke",
-    "verify": "node node_modules/vue-tsc/bin/vue-tsc.js --noEmit && node scripts/check-token-sync.mjs && node scripts/check-contrast.mjs && node scripts/check-palette.mjs && node node_modules/@dcloudio/vite-plugin-uni/bin/uni.js build -p mp-weixin && node scripts/lint-wxss.mjs && node scripts/city-smoke-test.mjs"
+    "verify": "node node_modules/vue-tsc/bin/vue-tsc.js --noEmit && node scripts/check-token-sync.mjs && node scripts/check-contrast.mjs && node scripts/check-palette.mjs && node scripts/check-platform.mjs && node node_modules/@dcloudio/vite-plugin-uni/bin/uni.js build -p mp-weixin && node scripts/lint-wxss.mjs && node scripts/city-smoke-test.mjs"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-5020420260813003",

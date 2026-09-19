@@ -1,0 +1,58 @@
+name: ci
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Fix environment (vue-router / esbuild platform binary)
+        run: npm run fix:env
+
+      # verify 链 = vue-tsc → check:tokens → contrast:audit → palette:audit
+      #              → build:mp-weixin → wxss:lint → city:smoke
+      - name: Verify chain
+        run: npm run verify
+
+      - name: Build H5 (预览源)
+        run: npm run build:h5
+
+  smoke:
+    runs-on: ubuntu-latest
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run fix:env
+
+      # 三个离线 smoke 段（server / client / city）在 CI 里全跑
+      - name: Offline smoke
+        run: npm run smoke:offline
+
+      # amap:smoke 打真实高德 API（消耗配额），默认不进 CI；
+      # 需要时给仓库配置 VITE_AMAP_WEB_KEY secret 后启用下面这段。
+      # - name: AMAP real-API smoke
+      #   env:
+      #     VITE_AMAP_WEB_KEY: ${{ secrets.VITE_AMAP_WEB_KEY }}
+      #   run: npm run amap:smoke
