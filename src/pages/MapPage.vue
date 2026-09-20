@@ -65,7 +65,12 @@ const summary = computed(() => {
   return `${d} · 约 ${t}（${mode.value === 'walking' ? '步行' : '驾车'}）`
 })
 
+// 路线规划代数：switchMode / 刷新不看在途任务，步行→驾车连点时后发先至，
+// 旧任务的慢响应晚回来会把新路线覆盖回旧结果。每个 await 后写回前先比对代数。
+let routeSeq = 0
+
 async function buildRoute() {
+  const seq = ++routeSeq
   const pts = geoItems.value
   if (pts.length < 2 || !AMAP_ENABLED) {
     polyline.value = []
@@ -82,6 +87,7 @@ async function buildRoute() {
       const a = { latitude: pts[i].lat, longitude: pts[i].lng }
       const b = { latitude: pts[i + 1].lat, longitude: pts[i + 1].lng }
       const r = mode.value === 'walking' ? await walkingRoute(a, b) : await drivingRoute(a, b)
+      if (seq !== routeSeq) return // 已有更新的规划在途：本任务作废，什么都不写回
       if (r) {
         dist += r.distance
         dur += r.duration
@@ -89,13 +95,15 @@ async function buildRoute() {
         else all.push(...r.points.slice(1))
       }
     }
+    if (seq !== routeSeq) return
     polyline.value = all.length
       ? [{ points: all, color: CANVAS_PALETTE.brand, width: 5, arrowLine: true }]
       : []
     routeDist.value = dist
     routeDur.value = dur
   } finally {
-    routing.value = false
+    // routing 归位只许最后一次规划做：旧任务的 finally 不能替新任务关掉 loading
+    if (seq === routeSeq) routing.value = false
   }
 }
 

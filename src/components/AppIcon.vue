@@ -97,21 +97,41 @@ const ICONS: Record<string, string[]> = {
 }
 
 const paths = computed(() => ICONS[props.name] || ICONS.other)
+
+/**
+ * 图标渲染为什么是「mask + data-URI」而不是内联 <svg>：
+ * WXML 不支持 svg 元素 —— 旧实现编译产物里是裸的 <svg>/<path>，
+ * 小程序端所有图标整片空白。改为把 SVG 做成 CSS 蒙版、颜色交给
+ * background-color:currentColor：既保住 28 处「不传 color、靠 CSS 继承/变量染色」
+ * 的调用点（data-URI 文档里 var()/currentColor 都不会解析，mask 方案则天然继承），
+ * H5 与小程序两端行为也一致。路径一律画黑色 —— 蒙版只看 alpha 通道。
+ */
+const maskImage = computed(() => {
+  const svg =
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" ` +
+    `stroke="#000" stroke-width="${props.stroke}" stroke-linecap="round" stroke-linejoin="round">` +
+    paths.value.map((d) => `<path d="${d}"/>`).join('') +
+    `</svg>`
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`
+})
 </script>
 
 <template>
-  <svg
-    :width="size"
-    :height="size"
-    viewBox="0 0 24 24"
-    fill="none"
-    :stroke="color"
-    :stroke-width="stroke"
-    stroke-linecap="round"
-    stroke-linejoin="round"
+  <view
     aria-hidden="true"
-    style="display: block; flex-shrink: 0"
-  >
-    <path v-for="(d, i) in paths" :key="i" :d="d" />
-  </svg>
+    class="icon"
+    :style="{
+      display: 'block',
+      'flex-shrink': 0,
+      width: size + 'px',
+      height: size + 'px',
+      'background-color': color,
+      '-webkit-mask-image': maskImage,
+      'mask-image': maskImage,
+      '-webkit-mask-repeat': 'no-repeat',
+      'mask-repeat': 'no-repeat',
+      '-webkit-mask-size': '100% 100%',
+      'mask-size': '100% 100%'
+    }"
+  />
 </template>

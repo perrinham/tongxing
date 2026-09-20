@@ -5,6 +5,7 @@ import { nav } from '@/utils/nav'
 import {
   CATEGORY_META,
   CATEGORY_ORDER,
+  categoryMetaOf,
   money,
   moneyBrief,
   shortDate,
@@ -29,7 +30,8 @@ const list = computed(() =>
 )
 
 const total = computed(() => (trip.value ? store.spentOf(trip.value.id) : 0))
-const perCapita = computed(() => total.value / (members.value.length || 1))
+// 人均必须走结算口径（按参与人摊，剔除非参与者），不能简单除以成员数
+const perCapita = computed(() => (trip.value ? store.settlementOf(trip.value.id).perCapita : 0))
 const myShare = computed(() => {
   const me = members.value.find((m) => m.isSelf) || members.value[0]
   if (!me || !trip.value) return 0
@@ -138,13 +140,13 @@ function goCreate() {
           <div class="list breakdown">
             <div class="bd-list">
               <div v-for="b in bars" :key="b.category" class="bd-row">
-                <span class="bd-name">{{ CATEGORY_META[b.category].label }}</span>
+                <span class="bd-name">{{ categoryMetaOf(b.category).label }}</span>
                 <span class="bd-track">
                   <span
                     class="bd-fill"
                     :style="{
                       width: `${b.pct}%`,
-                      background: CATEGORY_META[b.category].color
+                      background: categoryMetaOf(b.category).color
                     }"
                   />
                 </span>
@@ -186,11 +188,11 @@ function goCreate() {
                   <span
                     class="exp-icon"
                     :style="{
-                      background: CATEGORY_META[e.category].bg,
-                      color: CATEGORY_META[e.category].color
+                      background: categoryMetaOf(e.category).bg,
+                      color: categoryMetaOf(e.category).color
                     }"
                   >
-                    <AppIcon :name="CATEGORY_META[e.category].icon" :size="18" />
+                    <AppIcon :name="categoryMetaOf(e.category).icon" :size="18" />
                   </span>
                   <div class="grow exp-mid">
                     <p class="exp-title ellipsis">{{ e.title }}</p>

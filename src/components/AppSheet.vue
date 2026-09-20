@@ -41,7 +41,9 @@ function close() {
        纯 CSS animation 插入时自动播放、重渲染不重播，两端一致。 -->
   <!-- ⚠️ 不用 `inset: 0`：WXSS 编译器丢弃该简写 → 容器失去定位尺寸。 -->
   <div v-if="modelValue" class="wrap">
-    <div class="backdrop" @click="close" />
+    <!-- touchmove 拦截：遮罩区域的手势会滚穿到下层页面（滚动穿透）。
+         只拦 backdrop，不拦 sheet-body —— 那是弹层自己的滚动区。 -->
+    <div class="backdrop" @click="close" @touchmove.stop.prevent />
     <div class="sheet" :style="{ maxHeight }">
       <div v-if="title" class="sheet-head">
         <h3>{{ title }}</h3>

@@ -3,7 +3,7 @@ import { computed, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { useTripStore } from '@/stores/trip'
 import { nav } from '@/utils/nav'
-import { ITEM_TYPE_META, ITEM_TYPE_ORDER, endTime } from '@/utils/format'
+import { ITEM_TYPE_META, ITEM_TYPE_ORDER, endTime, moneyBrief } from '@/utils/format'
 import type { ItemType } from '@/types'
 import AppNav from '@/components/AppNav.vue'
 import AppIcon from '@/components/AppIcon.vue'
@@ -23,7 +23,12 @@ const done = ref(false)
 const item = computed(() => store.items.find((i) => i.id === itemId.value))
 const trip = computed(() => store.activeTrip)
 
-const cost = computed(() => Number(costText.value) || 0)
+const cost = computed(() => {
+  const v = Number(costText.value)
+  if (!Number.isFinite(v)) return 0
+  // 负数 / Infinity / 超长粘贴会污染预估价与花费汇总：夹到 [0, 1e7]
+  return Math.min(Math.max(v, 0), 10_000_000)
+})
 const duration = computed(() => Number(durationText.value) || 90)
 
 const end = computed(() => endTime(time.value, duration.value))
@@ -185,7 +190,7 @@ const durationOptions = [30, 45, 60, 90, 120, 180, 240, 300]
           </span>
         </div>
         <p v-if="cost > 0" class="cost-hint">
-          {{ peopleCount }} 人共 {{ totalCost }}，会算进行程预估价
+          {{ peopleCount }} 人共 {{ moneyBrief(totalCost) }}，会算进行程预估价
         </p>
       </div>
 

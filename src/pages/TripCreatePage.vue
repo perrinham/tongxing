@@ -95,7 +95,10 @@ function onEndChange(e: { detail: { value: string } }) {
 
 function submit() {
   if (!canSubmit.value) return
-  const names = memberNames.value.map((n) => n.trim()).filter(Boolean)
+  const raw = memberNames.value.map((n) => n.trim())
+  // 首位槽位固定是「我」：清空也不能让后面的人顶上来变成 isSelf（默认付款人）
+  if (!raw[0]) raw[0] = '我'
+  const names = raw.filter(Boolean)
   const trip = store.createTrip({
     title: `${destination.value}${dayCount.value}日`,
     destination: destination.value.trim(),
@@ -211,7 +214,7 @@ function submit() {
             class="member-input"
             placeholder="添加同行人"
             maxlength="10"
-            @keyup.enter="addMember"
+            @confirm="addMember"
           />
           <button class="btn-text" @click="addMember">添加</button>
         </div>

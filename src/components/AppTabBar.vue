@@ -70,7 +70,7 @@ const tabs = [
   height: 30px;
 }
 
-.tab-icon :deep(svg) {
+.tab-icon :deep(.icon) {
   display: block;
   flex-shrink: 0;
 }

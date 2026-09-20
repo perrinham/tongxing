@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { useTripStore } from '@/stores/trip'
 import { nav } from '@/utils/nav'
@@ -14,6 +14,11 @@ const tripId = ref('')
 const pace = ref<PaceLevel>('normal')
 const prefs = ref<string[]>(['food', 'history'])
 const generating = ref(false)
+// 页面卸载后不再执行完成跳转
+let alive = true
+onUnmounted(() => {
+  alive = false
+})
 const result = ref('')
 const error = ref('')
 
@@ -59,7 +64,10 @@ async function run() {
         pace: pace.value
       })
       result.value = summary
-      setTimeout(() => nav.replace('itinerary'), 620)
+      // 用户若已手动返回，不再强制拉回行程页
+      setTimeout(() => {
+        if (alive) nav.replace('itinerary')
+      }, 620)
     } catch (e) {
       error.value = '生成失败，换个偏好再试一次'
     } finally {

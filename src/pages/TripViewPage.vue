@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { useTripStore } from '@/stores/trip'
 import { nav } from '@/utils/nav'
-import { moneyBrief, shortDate, weekday, ITEM_TYPE_META, CATEGORY_META } from '@/utils/format'
+import { moneyBrief, shortDate, weekday, itemMetaOf, categoryMetaOf } from '@/utils/format'
 import AppNav from '@/components/AppNav.vue'
 import AppEmpty from '@/components/AppEmpty.vue'
 import AppIcon from '@/components/AppIcon.vue'
@@ -14,6 +14,12 @@ const store = useTripStore()
 const space = ref<TripSpaceFull | null>(null)
 const loading = ref(true)
 const errorText = ref('')
+
+// 页面卸载后不再回写异步结果（防止晚到的响应覆盖新页面状态）
+let alive = true
+onUnmounted(() => {
+  alive = false
+})
 
 const trip = computed(() => space.value?.doc.trip || null)
 const members = computed(() => space.value?.doc.members || [])
@@ -61,11 +67,13 @@ onLoad(async (options: Record<string, any> | undefined) => {
   }
   try {
     const r = await store.api().getSpace(id)
+    if (!alive) return
     space.value = r.space
   } catch (e) {
+    if (!alive) return
     errorText.value = e instanceof Error ? e.message : '加载失败'
   } finally {
-    loading.value = false
+    if (alive) loading.value = false
   }
 })
 </script>
@@ -135,7 +143,7 @@ onLoad(async (options: Record<string, any> | undefined) => {
           <div class="items">
             <div v-for="it in itemsOf(d.id)" :key="it.id" class="item">
               <span class="it-time num">{{ it.time || '--:--' }}</span>
-              <span class="it-dot" :style="{ background: ITEM_TYPE_META[it.type].color }" />
+              <span class="it-dot" :style="{ background: itemMetaOf(it.type).color }" />
               <div class="grow">
                 <p class="it-title">{{ it.title }}</p>
                 <p v-if="it.address" class="it-addr">{{ it.address }}</p>
@@ -147,8 +155,8 @@ onLoad(async (options: Record<string, any> | undefined) => {
           </div>
           <div v-if="expensesOf(d.id).length" class="exps">
             <div v-for="e in expensesOf(d.id)" :key="e.id" class="exp">
-              <span class="exp-cat" :style="{ background: CATEGORY_META[e.category].bg }">
-                {{ CATEGORY_META[e.category].label }}
+              <span class="exp-cat" :style="{ background: categoryMetaOf(e.category).bg }">
+                {{ categoryMetaOf(e.category).label }}
               </span>
               <span class="exp-title">{{ e.title }}</span>
               <span class="exp-amount num">{{ moneyBrief(e.amount, trip?.currency) }}</span>

@@ -19,6 +19,9 @@ withDefaults(
 )
 
 function goBack() {
+  // reLaunch 进入的 tab 页（首页形态）栈深只有 1，navigateBack 会**静默失败**；
+  // 栈底时不响应返回，页面保持现状（比点了没反应好不了多少，但至少不会卡死在错误态）
+  if (getCurrentPages().length <= 1) return
   nav.back()
 }
 

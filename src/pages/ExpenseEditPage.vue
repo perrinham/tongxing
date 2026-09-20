@@ -3,12 +3,13 @@ import { computed, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { useTripStore } from '@/stores/trip'
 import { nav } from '@/utils/nav'
-import { CATEGORY_META, CATEGORY_ORDER, money, todayISO } from '@/utils/format'
+import { CATEGORY_META, CATEGORY_ORDER, categoryMetaOf, money, todayISO } from '@/utils/format'
 import { splitAmount } from '@/utils/settlement'
 import type { ExpenseCategory, SplitMode } from '@/types'
 import AppNav from '@/components/AppNav.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import AppAvatar from '@/components/AppAvatar.vue'
+import AppEmpty from '@/components/AppEmpty.vue'
 
 const store = useTripStore()
 
@@ -19,6 +20,12 @@ const currency = computed(() => trip.value?.currency || '¥')
 
 const editId = ref('')
 const isEdit = computed(() => !!editId.value)
+
+/**
+ * 带 ?id= 进入但本地找不到这笔账单（典型：队友已删、墓碑同步落地，而入口列表还是旧的）。
+ * 必须显式报错而不是静默降级成「记一笔」——那会让用户以为在编辑，保存后凭空多出一笔重复账单。
+ */
+const missing = ref(false)
 
 const amountText = ref('')
 const title = ref('')
@@ -38,7 +45,14 @@ const amount = computed(() => {
   return Number.isFinite(v) ? v : 0
 })
 
-const canSave = computed(() => amount.value > 0 && participantIds.value.length > 0 && !!payerId.value)
+const canSave = computed(
+  () =>
+    amount.value > 0 &&
+    participantIds.value.length > 0 &&
+    !!payerId.value &&
+    // custom 模式必须把金额分完：余额 ≠0 就保存会被按比例悄悄缩放，入账与输入不符
+    (splitMode.value !== 'custom' || Math.abs(customRemain.value) < 0.005)
+)
 
 /** 均分结果，用于预览 */
 const evenPreview = computed(() => {
@@ -129,6 +143,8 @@ onLoad((options: Record<string, any> | undefined) => {
           customAmounts.value[p.memberId] = String(p.share)
         }
       })
+    } else {
+      missing.value = true
     }
   }
 })
@@ -171,7 +187,11 @@ function allSelected() {
 }
 
 function toggleAll() {
-  participantIds.value = allSelected() ? [members.value[0]?.id].filter(Boolean) : members.value.map((m) => m.id)
+  // 收起即「只选自己」：自己以 isSelf 标记为准 —— 成员可删可重排，首位不一定是自己
+  const selfId = members.value.find((m) => m.isSelf)?.id
+  participantIds.value = allSelected()
+    ? [selfId || members.value[0]?.id].filter(Boolean)
+    : members.value.map((m) => m.id)
 }
 
 function stepWeight(id: string, dir: 1 | -1) {
@@ -209,7 +229,7 @@ function save() {
 
   const payload = {
     tripId: trip.value.id,
-    title: title.value.trim() || CATEGORY_META[category.value].label,
+    title: title.value.trim() || categoryMetaOf(category.value).label,
     amount: amount.value,
     category: category.value,
     date: date.value,
@@ -236,7 +256,7 @@ const quickAmounts = [50, 100, 200, 500]
 
 <template>
   <div class="page edit-page">
-    <AppNav :title="isEdit ? '编辑账单' : '记一笔'" back>
+    <AppNav :title="isEdit || missing ? '编辑账单' : '记一笔'" back>
       <template #right>
         <button v-if="isEdit" class="nav-icon" @click="remove">
           <AppIcon name="trash" :size="19" color="var(--danger)" />
@@ -244,6 +264,15 @@ const quickAmounts = [50, 100, 200, 500]
       </template>
     </AppNav>
 
+    <!-- 找不到这笔账单：显式空态，绝不渲染创建表单（防止把「编辑」误存成新账单） -->
+    <AppEmpty
+      v-if="missing"
+      icon="wallet"
+      title="打不开这笔账单"
+      desc="它可能已被删除"
+    />
+
+    <template v-else>
     <!-- 金额显示 -->
     <div class="amount-block">
       <div class="amount-row">
@@ -460,6 +489,7 @@ const quickAmounts = [50, 100, 200, 500]
         {{ isEdit ? '保存' : '记下' }}
       </button>
     </div>
+    </template>
   </div>
 </template>
 

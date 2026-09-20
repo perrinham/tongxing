@@ -3,13 +3,14 @@ import { computed, ref, watch } from 'vue'
 import { useTripStore } from '@/stores/trip'
 import { nav } from '@/utils/nav'
 import {
-  ITEM_TYPE_META,
+  itemMetaOf,
   moneyBrief,
   shortDate,
   weekday,
   daysUntil,
   durationText,
-  endTime
+  endTime,
+  todayISO
 } from '@/utils/format'
 import AppNav from '@/components/AppNav.vue'
 import AppIcon from '@/components/AppIcon.vue'
@@ -39,7 +40,8 @@ watch(
     }
     if (!list.some((d) => d.id === activeDayId.value)) {
       // 默认停在今天所在的这一天，否则第一天
-      const today = new Date().toISOString().slice(0, 10)
+      // todayISO 按本地时区取「今天」；toISOString 是 UTC，凌晨 0-8 点会落到昨天
+      const today = todayISO()
       const hit = list.find((d) => d.date === today)
       activeDayId.value = (hit || list[0]).id
     }
@@ -262,18 +264,18 @@ function goMap() {
             >
               <div class="tl-time-col">
                 <span class="tl-time num">{{ it.time }}</span>
-                <span class="tl-node" :style="{ background: ITEM_TYPE_META[it.type].color }" />
+                <span class="tl-node" :style="{ background: itemMetaOf(it.type).color }" />
               </div>
               <div class="tl-body">
                 <div class="tl-line1">
                   <span
                     class="tint"
                     :style="{
-                      color: ITEM_TYPE_META[it.type].color,
-                      background: ITEM_TYPE_META[it.type].bg
+                      color: itemMetaOf(it.type).color,
+                      background: itemMetaOf(it.type).bg
                     }"
                   >
-                    {{ ITEM_TYPE_META[it.type].label }}
+                    {{ itemMetaOf(it.type).label }}
                   </span>
                   <span class="tl-title ellipsis">{{ it.title }}</span>
                   <button class="tl-more" @click.stop="openActions(it.id)">

@@ -17,10 +17,19 @@ const newName = ref('')
 const editingId = ref('')
 const editingName = ref('')
 
-const perCapita = computed(() => {
-  if (!trip.value) return 0
-  return store.spentOf(trip.value.id) / (members.value.length || 1)
+/** 全量结算只算一次：顶部人均和每个成员的收支都从这里取（原来模板每成员调 2 次
+ *  statsOf、每次全量结算，输入框每敲一个字就是 2N 次全量重算） */
+const settled = computed(() => (trip.value ? store.settlementOf(trip.value.id) : null))
+const statsMap = computed(() => {
+  const map = new Map<string, { paid: number; shouldPay: number }>()
+  for (const b of settled.value?.balances || []) {
+    map.set(b.memberId, { paid: b.paid, shouldPay: b.shouldPay })
+  }
+  return map
 })
+
+// 人均走结算的口径（按「参与过账单的人数」均摊），不再 ÷ 全部成员数
+const perCapita = computed(() => settled.value?.perCapita || 0)
 
 function add() {
   const n = newName.value.trim()
@@ -44,9 +53,7 @@ function commitEdit() {
 
 function setSelf(id: string) {
   if (!trip.value) return
-  members.value.forEach((m) => {
-    store.updateMember(m.id, { isSelf: m.id === id })
-  })
+  store.setSelfMember(trip.value.id, id)
 }
 
 function remove(id: string) {
@@ -62,12 +69,9 @@ function stepWeight(id: string, dir: 1 | -1) {
   store.updateMember(id, { weight: next })
 }
 
-/** 该成员的收支情况 */
+/** 该成员的收支情况（读 statsMap，不再触发结算） */
 function statsOf(id: string) {
-  if (!trip.value) return { paid: 0, shouldPay: 0 }
-  const s = store.settlementOf(trip.value.id)
-  const b = s.balances.find((x) => x.memberId === id)
-  return b ? { paid: b.paid, shouldPay: b.shouldPay } : { paid: 0, shouldPay: 0 }
+  return statsMap.value.get(id) || { paid: 0, shouldPay: 0 }
 }
 
 function goCreate() {
@@ -126,7 +130,7 @@ function addAndStick() {
                       v-model="editingName"
                       class="edit-input"
                       maxlength="10"
-                      @keyup.enter="commitEdit"
+                      @confirm="commitEdit"
                       @blur="commitEdit"
                     />
                   </template>
@@ -178,7 +182,7 @@ function addAndStick() {
               class="add-input"
               placeholder="输入名字，回车添加"
               maxlength="10"
-              @keyup.enter="addAndStick"
+              @confirm="addAndStick"
             />
             <button class="btn-tint" :disabled="!newName.trim()" @click="addAndStick">
               {{ added ? '已添加' : '添加' }}

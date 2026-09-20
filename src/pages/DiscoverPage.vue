@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { useTripStore } from '@/stores/trip'
 import { useCityStore } from '@/stores/city'
@@ -18,6 +18,12 @@ const guidesByCity = ref<Record<string, CityGuide[]>>({})
 const loading = ref(false)
 const needLogin = ref(false)
 const errorText = ref('')
+
+// 页面卸载后不再回写异步结果（防止晚到的响应覆盖新页面状态）
+let alive = true
+onUnmounted(() => {
+  alive = false
+})
 
 /**
  * 足迹聚合：城市 → 谁去过 / 谁想去。
@@ -46,16 +52,18 @@ async function loadAll() {
       city.api().listDiscoverTrips(),
       city.api().getAllCities()
     ])
+    if (!alive) return
     trips.value = (t.trips || []) as DiscoverTrip[]
     const map: Record<string, CityGuide[]> = {}
     for (const c of cities.cities || []) map[c.name] = c.guides || []
     guidesByCity.value = map
   } catch (e) {
+    if (!alive) return
     const status = (e as { status?: number }).status
     if (status === 401) needLogin.value = true
     else errorText.value = e instanceof Error ? e.message : '加载失败'
   } finally {
-    loading.value = false
+    if (alive) loading.value = false
   }
 }
 
