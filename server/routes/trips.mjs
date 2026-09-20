@@ -100,6 +100,7 @@ const SPLIT_MODES = ['even', 'weight', 'custom']
 /** 单空间各类记录上限：防止有人灌爆存储 */
 const KIND_LIMITS = { member: 200, day: 400, item: 4000, expense: 4000 }
 const MAX_TOTAL_RECORDS = 20000
+const KIND_TO_FIELD = { member: 'members', day: 'days', item: 'items', expense: 'expenses' }
 const MAX_TOMBSTONES = 3000
 
 function todayISO() {
@@ -510,32 +511,6 @@ function newSpace(id, author, ownerOpenid = '') {
   }
 }
 
-function brief(space) {
-  const t = space.doc.trip
-  return {
-    id: space.id,
-    code: space.code,
-    rev: space.rev,
-    deleted: isSpaceDeleted(space),
-    title: t?.title || '未命名行程',
-    destination: t?.destination || '',
-    startDate: t?.startDate || '',
-    endDate: t?.endDate || '',
-    updatedAt: space.updatedAt,
-    updatedBy: space.updatedBy,
-    counts: {
-      members: space.doc.members.length,
-      days: space.doc.days.length,
-      items: space.doc.items.length,
-      expenses: space.doc.expenses.length
-    }
-  }
-}
-
-function full(space) {
-  return { ...brief(space), doc: space.doc, tombstones: space.tombstones }
-}
-
 // ───────────────────────── 路由 ─────────────────────────
 
 export function createTripsRouter({
@@ -547,6 +522,44 @@ export function createTripsRouter({
   // 路由只负责「告诉它这个空间变了」，扇出与合并通知是 hub 的事。
   hub = null
 }) {
+  /**
+   * 空间概要。`code` 是写权凭据（凭它 join 即登记成员），所以**按查看者剥离**：
+   * 有主空间只有 owner / 成员能看到；无主空间维持 orphan-open 口径不剥
+   * （写权本就开放，码不构成越权升级）。否则「discover 剥码、GET /:id 送码」
+   * 会把只读浏览变回人人可写的后门。
+   *
+   * 必须在 router 闭包内：canSeeCode 要查成员表（db）。
+   */
+  function brief(space, viewerOpenid = '') {
+    const t = space.doc.trip
+    const canSeeCode =
+      !spaceHasOwner(db, space) ||
+      (!!viewerOpenid &&
+        (space.ownerOpenid === viewerOpenid || !!db.memberRoleOf(space.id, viewerOpenid)))
+    return {
+      id: space.id,
+      ...(canSeeCode ? { code: space.code } : {}),
+      rev: space.rev,
+      deleted: isSpaceDeleted(space, cap),
+      title: t?.title || '未命名行程',
+      destination: t?.destination || '',
+      startDate: t?.startDate || '',
+      endDate: t?.endDate || '',
+      updatedAt: space.updatedAt,
+      updatedBy: space.updatedBy,
+      counts: {
+        members: space.doc.members.length,
+        days: space.doc.days.length,
+        items: space.doc.items.length,
+        expenses: space.doc.expenses.length
+      }
+    }
+  }
+
+  function full(space, viewerOpenid = '') {
+    return { ...brief(space, viewerOpenid), doc: space.doc, tombstones: space.tombstones }
+  }
+
   /**
    * 所有时间戳比较都必须走这个封顶函数。
    * 库里的时间戳可能来自时钟不准的设备，不封顶会让它永远压过别人；
@@ -649,9 +662,32 @@ export function createTripsRouter({
     const revBefore = space.rev
     const staleBase = baseRev !== null && baseRev !== revBefore
 
+    // 合并前基线：合并后复核只拦**本次推送带来的增量**——老版本限额下合法累积、
+    // 现已存量超限的空间，靠幂等重推/无关编辑也能保住同步通道，不被 413 永久卡死。
+    const beforeTotal = existing ? countRecords(existing.doc) : 0
+    const beforeRows = {}
+    for (const kind of Object.keys(KIND_LIMITS)) {
+      beforeRows[kind] = existing ? (existing.doc[KIND_TO_FIELD[kind]] || []).length : 0
+    }
+
     const applied = doc
       ? mergeIntoSpace(space, doc, tombstones, capReq)
       : mergeTombstonesOnly(space, tombstones, capReq)
+
+    // 合并后复核总量：单次请求的限额挡不住「反复小推送、每次换 id」把库灌大。
+    // 仅当「超限且有增量」才拒；此处 space 尚未落盘（saveSpace 在后面），拒绝无副作用。
+    if (doc) {
+      const total = countRecords(space.doc)
+      if (total > MAX_TOTAL_RECORDS && total > beforeTotal) {
+        return http.fail(req, res, 413, `too many records (limit ${MAX_TOTAL_RECORDS})`, { total })
+      }
+      for (const [kind, limit] of Object.entries(KIND_LIMITS)) {
+        const rows = space.doc[KIND_TO_FIELD[kind]] || []
+        if (rows.length > limit && rows.length > beforeRows[kind]) {
+          return http.fail(req, res, 413, `too many ${kind}s (limit ${limit})`, { count: rows.length })
+        }
+      }
+    }
 
     const digest = digestOf(space)
     const changed = digest !== space.digest
@@ -694,7 +730,7 @@ export function createTripsRouter({
     })
 
     return http.send(req, res, 200, {
-      space: brief(space),
+      space: brief(space, openid),
       doc: space.doc,
       tombstones: space.tombstones,
       applied,
@@ -760,7 +796,7 @@ export function createTripsRouter({
         const added = db.addMember(space.id, openid, 'member')
         if (added) log.info('新成员加入空间', { id: space.id, openid: openid.slice(0, 8) })
       }
-      return http.send(req, res, 200, { space: full(space), joined: !!openid })
+      return http.send(req, res, 200, { space: full(space, openid), joined: !!openid })
     }
 
     // 按分享码加入（必须先于 :id 匹配，否则 'by-code' 会被当成 spaceId）
@@ -773,7 +809,7 @@ export function createTripsRouter({
       if (req.method !== 'GET') return http.methodNotAllowed(req, res, ['GET', 'OPTIONS'])
       const space = findByCode(code)
       if (!space) return http.fail(req, res, 404, 'code not found')
-      return http.send(req, res, 200, { space: full(space) })
+      return http.send(req, res, 200, { space: full(space, identityOf(req)?.openid || '') })
     }
 
     // 发现广场：所有登录用户可见的全部未删除行程（只读浏览）。
@@ -844,7 +880,9 @@ export function createTripsRouter({
       if (req.method === 'GET') {
         const space = db.loadSpace(id)
         if (!space) return http.fail(req, res, 404, 'not found')
-        return http.send(req, res, 200, { space: full(space) })
+        // 按查看者剥 code：有主空间的分享码只给 owner / 成员（id 是 capability，
+        // 但码是写权凭据 —— 不能因为「读开放」就把写权一并送出去）
+        return http.send(req, res, 200, { space: full(space, identityOf(req)?.openid || '') })
       }
 
       return http.methodNotAllowed(req, res, ['GET', 'POST', 'DELETE', 'OPTIONS'])
@@ -862,7 +900,13 @@ export function createTripsRouter({
       if (!verdict.ok) return http.fail(req, res, verdict.status, verdict.message)
       const old = space.code
       space.code = allocateCode()
-      space.retiredCodes = [...(space.retiredCodes || []), old].slice(-3)
+      // 旧码 7 天宽限（群里发过的码不至于立刻失效），到期作废。
+      // 带时间戳才作废得了 —— 之前只存码字符串，旧码永久可用，
+      // 「换码踢掉泄漏持码人」从来没有真正生效过。
+      const retired = (space.retiredCodes || []).map((c) =>
+        typeof c === 'string' ? { code: c, retiredAt: 0 } : c
+      )
+      space.retiredCodes = [...retired, { code: old, retiredAt: Date.now() }].slice(-3)
       space.updatedAt = Date.now()
       db.saveSpace(space)
       return http.send(req, res, 200, { code: space.code, previous: old })
@@ -903,7 +947,7 @@ export function createTripsRouter({
         ? hub.dropSubscribers(id, (conn) => !!conn.openid && conn.openid === openid)
         : 0
       log.info('空间已认领', { id, openid: openid.slice(0, 8), revokedSubscriptions: revoked })
-      return http.send(req, res, 200, { ok: true, space: brief(found), revokedSubscriptions: revoked })
+      return http.send(req, res, 200, { ok: true, space: brief(found, openid), revokedSubscriptions: revoked })
     }
 
     return false

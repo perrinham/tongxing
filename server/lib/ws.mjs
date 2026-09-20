@@ -543,6 +543,13 @@ export function createWsConnection(socket, opts = {}) {
       conn.closed = true
       notifyClose({ code, reason, initiatedBy: 'peer' })
       socket.end()
+      // end() 之后正常对端会立刻回 FIN，但半开对端（发完 close 就装死）永远不会 ——
+      // 不强拆的话 fd 永久泄漏，而 notifyClose 已把它从 hub 摘掉，心跳与连接
+      // 上限都看不见它，未认证就能无限占 fd。给 5s 收尾，到点硬销毁。
+      const t = setTimeout(() => {
+        if (!socket.destroyed) socket.destroy()
+      }, 5000)
+      t.unref?.()
     },
     onError: ({ reason, code }) => {
       opts.onError?.({ reason, code })

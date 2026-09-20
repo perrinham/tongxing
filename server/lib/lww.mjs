@@ -145,9 +145,18 @@ export function mergeRecord(base, incoming, cap = (h) => h) {
 
     // 严格更晚才赢；相等保留 base —— 见文件头的「平局口径」。
     if (inc && (!cur || hlcAfter(inc, cur))) {
-      if (loose(incoming) && hasOwn(incoming, k)) out[k] = loose(incoming)[k]
-      stamp[k] = incH[k]
-      if (cur) took += 1
+      // 值和戳必须同进退：incoming 时间赢、但记录体里没带这个键时，值只能留
+      // base 的旧值，戳也必须一起留 —— 若只顶戳，会「新戳守着旧值」，
+      // 后续对这一格的编辑按戳判负而被悄悄吞掉（戳值脱钩）。
+      const hasBodyKey = loose(incoming) && hasOwn(incoming, k)
+      if (hasBodyKey) {
+        out[k] = loose(incoming)[k]
+        stamp[k] = incH[k]
+        if (cur) took += 1
+      } else {
+        stamp[k] = baseH?.[k] ?? incH[k]
+        if (inc) kept += 1
+      }
     } else {
       stamp[k] = baseH[k]
       if (inc) kept += 1

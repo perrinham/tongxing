@@ -262,7 +262,10 @@ export function createDb({ file, legacyJsonFile = null, clock = null } = {}) {
     listGuidesByCity: handle.prepare('SELECT * FROM guides WHERE city_name = ?'),
     listGuidesByOpenid: handle.prepare('SELECT * FROM guides WHERE author_openid = ? ORDER BY updated_at DESC'),
     delGuide: handle.prepare('DELETE FROM guides WHERE id = ?'),
-    delGuidesByCityAuthor: handle.prepare('DELETE FROM guides WHERE city_name = ? AND author = ?'),
+    // 只删**无主**行：这条路径由「匿名 + 自报昵称」驱动，昵称可被任何人冒用，
+    // 若不过滤归属，就能删掉已被认领给他人的攻略（upsert / 按 id 删都有 403 保护）。
+    delGuidesByCityAuthor:
+      handle.prepare("DELETE FROM guides WHERE city_name = ? AND author = ? AND (author_openid IS NULL OR author_openid = '')"),
     delGuidesByCityOpenid: handle.prepare('DELETE FROM guides WHERE city_name = ? AND author_openid = ?'),
     countGuides: handle.prepare('SELECT COUNT(*) AS n FROM guides'),
 
@@ -493,7 +496,7 @@ export function createDb({ file, legacyJsonFile = null, clock = null } = {}) {
     return out
   }
 
-  /** 按分享码找空间：先用当前码走索引，再回退到曾用名（retiredCodes）里精确比对 */
+  /** 按分享码找空间：先用当前码走索引，再回退到 7 天宽限期内的旧码（retiredCodes） */
   function findSpaceByCode(code, { includeDeleted = false } = {}) {
     if (!code) return null
 
@@ -507,7 +510,14 @@ export function createDb({ file, legacyJsonFile = null, clock = null } = {}) {
     // 避免 '"AB12CD"' 这种子串误匹配。
     for (const row of S.retiredCandidates.all(`%"${code}"%`)) {
       const list = parseJson(row.retired_codes, [])
-      if (!Array.isArray(list) || !list.includes(code)) continue
+      if (!Array.isArray(list)) continue
+      // 条目 {code, retiredAt}：7 天宽限期内可用；纯字符串是带时间戳之前的
+      // 存量（retiredAt:0），视为已过期 —— 否则换码永远踢不掉旧持码人
+      const GRACE_MS = 7 * 24 * 3600 * 1000
+      const live = list.some(
+        (e) => e && typeof e === 'object' && e.code === code && Date.now() - e.retiredAt < GRACE_MS
+      )
+      if (!live) continue
       const space = loadSpace(row.id)
       if (space && (includeDeleted || !isSpaceDeleted(space, cap))) return space
     }

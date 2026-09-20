@@ -6,6 +6,8 @@
  * 未在白名单内的键一律丢弃，杜绝脏字段与原型污染落库。
  */
 
+import { randomInt } from 'node:crypto'
+
 /** 原型污染高危键：即使形如合法 id 也必须拒绝 */
 export const BAD_KEYS = new Set(['__proto__', 'constructor', 'prototype'])
 
@@ -102,7 +104,8 @@ const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 export function makeCode(len = 6) {
   let s = ''
   for (let i = 0; i < len; i += 1) {
-    s += CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]
+    // 分享码=写权凭据，用 CSPRNG：Math.random 的内部状态可由连续输出反推
+    s += CODE_ALPHABET[randomInt(CODE_ALPHABET.length)]
   }
   return s
 }

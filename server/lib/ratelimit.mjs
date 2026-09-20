@@ -17,8 +17,14 @@ export function createRateLimiter({ windowMs = 60_000, max = 300, maxKeys = 8000
       if (kept.length) hits.set(k, kept)
       else hits.delete(k)
     }
-    // 极端情况下（大量不同 IP）防止内存膨胀
-    if (hits.size > maxKeys) hits.clear()
+    // 极端情况下（大量不同 IP）防止内存膨胀：按插入序淘汰最旧 key（Map 迭代序即
+    // 插入序），不清零幸存 key —— 全量 clear 会被攻击者周期性洗掉限流记录。
+    if (hits.size > maxKeys) {
+      for (const k of hits.keys()) {
+        if (hits.size <= maxKeys) break
+        hits.delete(k)
+      }
+    }
   }
 
   return {

@@ -71,7 +71,10 @@ const VERSION = '2.0.0'
 // ───────────────────────── 配置 ─────────────────────────
 
 function envInt(name, fallback, min, max) {
-  const n = Number(process.env[name])
+  // 空串视为未设置：Number('') === 0，否则 PORT='' 会绑到 1 端口、RATE_LIMIT='' 限流全命中
+  const raw = String(process.env[name] ?? '').trim()
+  if (!raw) return fallback
+  const n = Number(raw)
   if (!Number.isFinite(n)) return fallback
   return Math.min(max, Math.max(min, Math.round(n)))
 }
@@ -178,7 +181,6 @@ function healthPayload() {
       ephemeralSecret: identity.ephemeralSecret
     },
     limits: { maxBodyBytes: MAX_BODY_BYTES, rateLimit: RATE_LIMIT, rateWindowMs: RATE_WINDOW_MS },
-    clock: { node: clock.node, maxSkewMs: clock.maxSkewMs, last: clock.peek() },
     // 实时通道状态。连接数这类指标放在这里是因为它没有别的观测面 ——
     // 实时连接不进 access 日志（否则一次长连接会话会刷爆日志）。
     realtime: realtime ? realtime.stats() : { enabled: false },
@@ -293,6 +295,11 @@ const realtime = WS_ENABLED
       auth,
       log,
       allowedOrigins: ALLOWED_ORIGINS,
+      // 握手（upgrade）不经过 request 处理器，得单独过 IP 限流。
+      // 用**独立实例**（同配置同风格）：HTTP 洪泛不应连带锁死实时重连，
+      // 两条通道各自有各自的每 IP 预算。RATE_LIMIT=0 表示限流关闭，传 null 保持一致口径。
+      limiter: RATE_LIMIT > 0 ? createRateLimiter({ windowMs: RATE_WINDOW_MS, max: RATE_LIMIT }) : null,
+      clientIpOf: clientIp,
       path: WS_PATH,
       pingMs: envInt('WS_PING_MS', 25_000, 1000, 600_000),
       authGraceMs: envInt('WS_AUTH_GRACE_MS', 5_000, 500, 60_000),
@@ -349,6 +356,13 @@ function shutdown(signal, code = 0) {
 
 process.on('SIGINT', () => shutdown('SIGINT'))
 process.on('SIGTERM', () => shutdown('SIGTERM'))
+
+// listen 失败（典型：端口被占 EADDRINUSE）若没人监听 error，会以误导性的
+// uncaughtException 堆栈收场；这里给一句明确原因再退出，方便排障。
+server.on('error', (err) => {
+  log.error('服务出错，进程退出', { code: err?.code, message: err?.message, port: PORT })
+  process.exit(1)
+})
 
 server.listen(PORT, () => {
   log.info('服务已启动', {

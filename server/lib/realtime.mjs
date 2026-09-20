@@ -50,6 +50,10 @@ export function createRealtime({
   auth,
   log,
   allowedOrigins = [],
+  /** 握手专用 IP 限流器（与 HTTP 同配置但独立计数；RATE_LIMIT=0 时传 null） */
+  limiter = null,
+  /** 从 upgrade 请求取客户端 IP（与 REST 侧同一口径，含 TRUST_PROXY 处理） */
+  clientIpOf = null,
   path = '/api/ws',
   pingMs = 25_000,
   authGraceMs = 5_000,
@@ -209,9 +213,27 @@ export function createRealtime({
   function applyIdentity(conn, msg) {
     const token = Array.isArray(msg.token) ? msg.token[0] : msg.token
     const v = identity.verify(typeof token === 'string' ? token : '')
+    const prev = conn.openid
     conn.openid = v.ok ? v.openid : ''
     conn.authReason = v.reason
     conn.deviceId = String(msg.deviceId || '').slice(0, 64)
+    // 重复 hello 换人 / 掉身份（令牌失效 openid 被清空）：按新身份复核已有订阅，
+    // 无权读的空间即时退订 —— 否则旧身份留下的订阅会继续收到私有空间的更新通知。
+    if (conn.helloReceived && prev !== conn.openid) {
+      const dropped = []
+      for (const id of conn.subscriptions || []) {
+        const space = db.loadSpace(id)
+        // 空间不存在（可能本机刚建还没推上来）：保持订阅，与 trySubscribe 口径一致
+        if (!space) continue
+        if (!accessVerdict(db, space, conn.openid).ok) {
+          hub.unsubscribe(conn, id)
+          dropped.push(id)
+        }
+      }
+      if (dropped.length) {
+        log?.info?.('身份变更，回收无权订阅', { conn: conn.id, count: dropped.length })
+      }
+    }
   }
 
   function readyFrame(conn) {
@@ -270,6 +292,19 @@ export function createRealtime({
     if (url.pathname !== path) {
       rejectedHandshakes += 1
       return rejectHandshake(socket, 404, 'no websocket endpoint here')
+    }
+
+    // 握手也过 IP 限流：upgrade 走独立的 'upgrade' 事件，不经过 HTTP 侧的 request
+    // 处理器，不限流的话海量握手可以绕过 REST 的限流预算。与 HTTP 共用同一份
+    // 每 IP 计数（握手占一个名额），超限直接拒握手。
+    if (limiter) {
+      const ip = clientIpOf ? clientIpOf(req) : ''
+      const rl = limiter.check(ip)
+      if (!rl.ok) {
+        rejectedHandshakes += 1
+        log?.warn?.('实时握手被拒（IP 限流）', { ip })
+        return rejectHandshake(socket, 429, 'too many requests')
+      }
     }
 
     // 同源校验。浏览器发起 WS 一定会带 Origin，非浏览器客户端不带 ——
