@@ -5,6 +5,8 @@ uni-app 3（Vue3 + TS）行程规划与同行分摊 App，双端：**mp-weixin�
 ## 硬约束
 
 - **`server/` 零改动**（用户明确要求）。前端改动不得引入后端接口变更。
+  ⚠️ **一次性解禁在案**：投票功能经用户授权对 `poll`/`vote` 两个 kind 做了白名单增量扩展
+  （2026-09-20，纯配置/NORMALIZER/digestOf/counts），口径是要么纯增量、要么不动。
 - 双端都要能构建：`npm run build:h5` 与 `npm run build:mp-weixin` 均须 DONE。
 - **高德 key 不进库**：真 key 在 `.env.local`（已被 `*.local` 忽略），入库的 `.env` 是空默认值。
   `src/config.ts` 读 `import.meta.env.VITE_AMAP_WEB_KEY`，空则自动降级本地 6 城库。
@@ -32,7 +34,7 @@ npm run contrast:audit     # 文字对比度闸门（45 条配对 + 七类断言
 npm run palette:audit      # 色板体检：分类色三条约束，越界即返回非 0（23.5 / 25.9 / 3.09:1）
 npm run check:platform     # 平台能力闸门：.self / inset: / fillStyle=var() / createSelectorQuery 无 .in / saveImageToPhotosAlbum 无 H5 兜底
 npm run build:mp-weixin
-npm run wxss:lint          # 22 个 wxss
+npm run wxss:lint          # 24 个 wxss
 npm run city:smoke         # 65 用例
 npm run verify             # 上面几项的串链；四个闸门都在链里
 ```

@@ -47,8 +47,8 @@ const { DatabaseSync } = require('node:sqlite')
 const SCHEMA_VERSION = 2
 
 /** 集合名 → doc 里的键（与 routes/trips.mjs 保持一致） */
-const DOC_KEY = { member: 'members', day: 'days', item: 'items', expense: 'expenses' }
-const ARRAY_KINDS = ['member', 'day', 'item', 'expense']
+const DOC_KEY = { member: 'members', day: 'days', item: 'items', expense: 'expenses', poll: 'polls', vote: 'votes' }
+const ARRAY_KINDS = ['member', 'day', 'item', 'expense', 'poll', 'vote']
 
 /** 攻略表里单独提列、其余进 data JSON 的字段 */
 const GUIDE_COLUMNS = ['status']
@@ -139,7 +139,7 @@ function parseJson(raw, fallback) {
 }
 
 function emptyDoc() {
-  return { trip: null, members: [], days: [], items: [], expenses: [] }
+  return { trip: null, members: [], days: [], items: [], expenses: [], polls: [], votes: [] }
 }
 
 /**

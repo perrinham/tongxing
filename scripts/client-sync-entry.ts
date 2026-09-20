@@ -1088,7 +1088,141 @@ ok(
 // 收尾：把实时通道关掉，别让 Node 进程被长连接挂住
 as('A').stopRealtime()
 as('B').stopRealtime()
+as('C').stopRealtime()
 ok(A.realtime.status === 'stopped' && B.realtime.status === 'stopped', '停止后状态回到 stopped')
+
+// ───────────────────────── 投票（poll + vote 实体）─────────────────────────
+section('[13] 投票：无主空间上的创建 / 同步 / 并发投票 / 关闭 / 应用 / 删除')
+{
+  // 匿名建一个无主空间，A/B/C 都能读写，避免身份授权干扰投票本身
+  as('A').logout()
+  const T8 = A.createTrip({
+    title: '投票测试',
+    destination: '成都',
+    startDate: '2027-06-01',
+    endDate: '2027-06-03',
+    budget: 1000,
+    memberNames: ['我', '阿B', '阿C']
+  })
+  await as('A').syncAll()
+  const code8 = String(A.sync.codes[T8.id] || '')
+  ok(/^[A-Z0-9]{6}$/.test(code8), '拿到 T8 分享码', code8)
+
+  await as('B').joinByCode(code8)
+  await as('C').joinByCode(code8)
+  ok(B.membersOf(T8.id).length === 3 && C.membersOf(T8.id).length === 3, '三人都在成员表')
+
+  // 创建日期投票
+  const P1 = A.createPoll({
+    tripId: T8.id,
+    kind: 'date',
+    title: '出发日期',
+    options: ['2027-06-01', '2027-06-02', '2027-06-03']
+  })
+  ok(!!P1, 'A 发起日期投票', P1)
+  const poll1 = A.polls.find((p) => p.id === P1)!
+  ok(poll1.options.length === 3, '三个候选选项', poll1.options.map((o) => o.label))
+  await as('A').syncAll()
+  ok(A.sync.lastStatus === 'ok', '投票推送成功', A.sync.lastStatus)
+  ok(A.tallyOf(P1)?.total === 0, '初始 0 票')
+
+  ok(!B.polls.some((p) => p.id === P1), 'B 本地还没有投票')
+  await as('B').syncAll()
+  ok(B.polls.some((p) => p.id === P1), 'B 同步后看到投票', B.polls.map((p) => p.id))
+  ok(B.polls.find((p) => p.id === P1)?.options.length === 3, 'B 端候选一致')
+
+  // 并发投票：A 投 06-01、C 投 06-02 → 两个不同成员，票不能互相覆盖
+  const mI = A.membersOf(T8.id).find((m) => m.name === '我')!
+  const mC = C.membersOf(T8.id).find((m) => m.name === '阿C')!
+  const mB = B.membersOf(T8.id).find((m) => m.name === '阿B')!
+  // C 得先把 P1 同步回来，否则本地没有该投票，castVote 会静默跳过
+  await as('C').syncAll()
+  ok(C.polls.some((p) => p.id === P1), 'C 也同步到了投票')
+  A.castVote(P1, mI.id, poll1.options[0].id)
+  C.castVote(P1, mC.id, poll1.options[1].id)
+  await as('A').syncAll()
+  await as('C').syncAll()
+  // A 得再拉一次，才能看到 C 刚推的票
+  await as('A').syncAll()
+  ok(A.tallyOf(P1)?.total === 2, '并发投票合并后两票都在（不丢票）', A.tallyOf(P1)?.total)
+  ok(
+    A.tallyOf(P1)?.options.find((o) => o.option.id === poll1.options[1].id)?.count === 1,
+    'C 投的 06-02 没有被 A 的票覆盖'
+  )
+
+  // 改票：A 与 C 都改投 06-03（同一批同步不可知，改票 = 更新自己的那一票）
+  A.castVote(P1, mI.id, poll1.options[2].id)
+  C.castVote(P1, mC.id, poll1.options[2].id)
+  await as('A').syncAll()
+  await as('C').syncAll()
+  await as('A').syncAll()
+  const tally1 = A.tallyOf(P1)
+  ok(tally1?.total === 2, '改票后仍是两票', tally1?.total)
+  ok(
+    tally1?.options.find((o) => o.option.id === poll1.options[2].id)?.count === 2,
+    '两票都改到了 06-03'
+  )
+  ok(tally1?.winner?.option.id === poll1.options[2].id, '06-03 胜出', tally1?.winner?.option.label)
+
+  // 关闭 → result 定格胜者
+  A.closePoll(P1)
+  ok(A.polls.find((p) => p.id === P1)?.status === 'closed', '投票已关闭')
+  ok(A.polls.find((p) => p.id === P1)?.result === poll1.options[2].id, 'result 定格胜者')
+  await as('A').syncAll()
+  await as('B').syncAll()
+  ok(B.polls.find((p) => p.id === P1)?.status === 'closed', 'B 同步到关闭状态')
+  ok(B.polls.find((p) => p.id === P1)?.result === poll1.options[2].id, 'B 端 result 一致')
+
+  // 应用：胜出 06-03 → startDate=06-03，endDate 按行程原 3 天顺延到 06-05
+  A.applyPollResult(P1)
+  const t8 = A.trips.find((t) => t.id === T8.id)!
+  ok(t8.startDate === '2027-06-03', '应用后 startDate 是胜出日期', t8.startDate)
+  ok(t8.endDate === '2027-06-05', 'endDate 按原天数顺延', t8.endDate)
+
+  // 目的地投票：B/C 都投「重庆」→ 关闭 → 应用到 destination
+  const P2 = A.createPoll({ tripId: T8.id, kind: 'destination', title: '换去哪', options: ['重庆', '昆明'] })
+  await as('A').syncAll()
+  await as('B').syncAll()
+  await as('C').syncAll()
+  ok(B.polls.some((p) => p.id === P2) && C.polls.some((p) => p.id === P2), 'B/C 都看到了目的地投票')
+  const poll2 = A.polls.find((p) => p.id === P2)!
+  B.castVote(P2, mB.id, poll2.options[0].id)
+  C.castVote(P2, mC.id, poll2.options[0].id)
+  await as('B').syncAll()
+  await as('C').syncAll()
+  await as('A').syncAll()
+  ok(
+    A.tallyOf(P2)?.options.find((o) => o.option.id === poll2.options[0].id)?.count === 2,
+    'B 和 C 都投了重庆'
+  )
+  A.closePoll(P2)
+  A.applyPollResult(P2)
+  ok(A.trips.find((t) => t.id === T8.id)!.destination === '重庆', '目的地应用到行程', A.trips.find((t) => t.id === T8.id)!.destination)
+
+  // 删除投票 → 墓碑 + 连带票一起删，其他端同步后消失
+  A.removePoll(P2)
+  await as('A').syncAll()
+  await as('B').syncAll()
+  await as('C').syncAll()
+  ok(!B.polls.some((p) => p.id === P2), '删除后 B 端投票消失', B.polls.map((p) => p.id))
+  ok(!C.votes.some((v) => v.pollId === P2), '删除后 C 端的票也消失', C.votes.map((v) => v.id))
+  ok(C.polls.some((p) => p.id === P1), '另一个投票 P1 不受影响')
+
+  // 本地清理路径
+  as('C').resetAll()
+  ok(C.polls.length === 0 && C.votes.length === 0, 'resetAll 后本地投票/票清空')
+
+  // removePoll 立即从本地列表消失（脱离同步，纯本地检查）
+  const P3 = as('A').createPoll({ tripId: T8.id, kind: 'destination', options: ['武汉'] })
+  ok(!!P3, 'A 又发起一个候选', P3)
+  as('A').removePoll(P3!)
+  ok(!A.polls.some((p) => p.id === P3), 'removePoll 后本地列表不再含它')
+  ok(
+    A.votes.filter((v) => v.pollId === P1).length === 2,
+    '删除其它投票不误伤 P1 的票',
+    A.votes.filter((v) => v.pollId === P1).length
+  )
+}
 
 console.log(`\n===== 客户端同步结果：${H.pass} 通过 / ${H.fail} 失败 =====\n`)
 process.exit(H.fail ? 1 : 0)

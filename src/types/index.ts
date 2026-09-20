@@ -129,6 +129,80 @@ export type ExpenseCategory =
   | 'entertain'
   | 'other'
 
+/** 投票的主题：给行程定出发日期 / 目的地 */
+export type PollKind = 'date' | 'destination'
+
+/** 投票状态：进行中 / 已结束（可应用到行程） */
+export type PollStatus = 'open' | 'closed'
+
+/** 一个投票候选选项 */
+export interface PollOption {
+  id: string
+  /** 展示值：日期候选是 'YYYY-MM-DD'，目的地候选是城市名 */
+  label: string
+}
+
+/**
+ * 一次投票：成员给行程的候选日期 / 候选目的地投票。
+ *
+ * 同步语义与 member/item 等一致（独立记录 + 字段级 HLC）：选项列表整体当一个
+ * 字段合并（发起票时定，之后不改），每张票是**另一类记录** Vote —— 拆开才能
+ * 并发不丢票（整块 ballots 当字符串字段会被最后写的人整体覆盖）。
+ */
+export interface Poll {
+  id: string
+  tripId: string
+  kind: PollKind
+  title: string
+  options: PollOption[]
+  status: PollStatus
+  /** 已采纳的选项 id（「应用于行程」时落到这里，之后 result 不再参与 LWW 变更） */
+  result?: string
+  createdAt: number
+  updatedAt?: number
+  /** 本次修改的 HLC，参与云端 LWW 比较；老记录没有则回退用 updatedAt */
+  hlc?: Hlc
+  /**
+   * 字段级时间戳：每个可合并字段各带一个 HLC。
+   *
+   * 记录级 hlc 只能回答「这条记录谁最后改的」，答不了「哪个字段谁最后改的」——
+   * 于是两人分别改同一条记录的不同字段时会丢一边。有了这张映射就能逐字段比。
+   *
+   * **映射必须是完整的**（每个可合并字段都有值）：缺字段会退回记录级 hlc，
+   * 而记录级 hlc 是各字段戳的最大值，会被别的字段的编辑顶高 → 反而更容易盖掉别人。
+   * 老记录没有这个字段，整体退到记录级语义，不需要迁移。
+   */
+  fhlc?: Record<string, Hlc>
+}
+
+/**
+ * 一张票：某成员在某个投票里选了哪个选项。
+ *
+ * id = `${pollId}:${memberId}` —— 成员与投票唯一对应，改票就是更新自己这条
+ * 记录（字段级并发安全，两个成员同时投互不覆盖）。
+ */
+export interface Vote {
+  id: string
+  tripId: string
+  pollId: string
+  memberId: string
+  optionId: string
+  updatedAt?: number
+  /** 本次修改的 HLC，参与云端 LWW 比较；老记录没有则回退用 updatedAt */
+  hlc?: Hlc
+  /**
+   * 字段级时间戳：每个可合并字段各带一个 HLC。
+   *
+   * 记录级 hlc 只能回答「这条记录谁最后改的」，答不了「哪个字段谁最后改的」——
+   * 于是两人分别改同一条记录的不同字段时会丢一边。有了这张映射就能逐字段比。
+   *
+   * **映射必须是完整的**（每个可合并字段都有值）：缺字段会退回记录级 hlc，
+   * 而记录级 hlc 是各字段戳的最大值，会被别的字段的编辑顶高 → 反而更容易盖掉别人。
+   * 老记录没有这个字段，整体退到记录级语义，不需要迁移。
+   */
+  fhlc?: Record<string, Hlc>
+}
+
 export type SplitMode = 'even' | 'weight' | 'custom'
 
 /** 参与分摊的人 */
@@ -259,6 +333,8 @@ export interface PersistShape {
   days: Day[]
   items: ItineraryItem[]
   expenses: Expense[]
+  polls: Poll[]
+  votes: Vote[]
   activeTripId: string | null
 }
 
@@ -284,7 +360,7 @@ export interface Hlc {
 }
 
 /** 可参与同步的实体类型 */
-export type SyncEntityKind = 'trip' | 'member' | 'day' | 'item' | 'expense'
+export type SyncEntityKind = 'trip' | 'member' | 'day' | 'item' | 'expense' | 'poll' | 'vote'
 
 /**
  * 删除墓碑。
@@ -311,6 +387,8 @@ export interface TripDoc {
   days: Day[]
   items: ItineraryItem[]
   expenses: Expense[]
+  polls: Poll[]
+  votes: Vote[]
 }
 
 /** 云端空间概要（列表用，不含文档体） */
@@ -325,7 +403,7 @@ export interface TripSpaceBrief {
   endDate: string
   updatedAt: number
   updatedBy: string
-  counts: { members: number; days: number; items: number; expenses: number }
+  counts: { members: number; days: number; items: number; expenses: number; polls: number; votes: number }
 }
 
 /** 云端空间全量（含文档体与墓碑） */

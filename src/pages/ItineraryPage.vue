@@ -76,6 +76,15 @@ const daySpend = computed(() => {
     .reduce((s, e) => s + e.amount, 0)
 })
 
+const openPolls = computed(() =>
+  trip.value ? store.pollsOf(trip.value.id).filter((p) => p.status === 'open') : []
+)
+const allPolls = computed(() => (trip.value ? store.pollsOf(trip.value.id) : []))
+
+function goPolls() {
+  if (trip.value) nav.to('poll', { id: trip.value.id })
+}
+
 function pickDay(id: string) {
   activeDayId.value = id
 }
@@ -202,6 +211,15 @@ function goMap() {
             <span v-if="members.length > 5" class="ov-more">+{{ members.length - 5 }}</span>
             <span class="grow" />
             <span class="row-value">管理</span>
+            <AppIcon name="right" :size="15" color="var(--text-tertiary)" />
+          </button>
+          <div class="list-sep" />
+          <button class="list-row" @click="goPolls">
+            <AppIcon name="flag" :size="18" color="var(--text-secondary)" />
+            <span class="pad">投票</span>
+            <span class="grow" />
+            <span v-if="openPolls.length" class="badge-num">{{ openPolls.length }}</span>
+            <span v-else-if="allPolls.length" class="row-value">已结束</span>
             <AppIcon name="right" :size="15" color="var(--text-tertiary)" />
           </button>
           <div class="list-sep" />
@@ -366,6 +384,24 @@ function goMap() {
 .row-value {
   font-size: 15px;
   color: var(--text-secondary);
+}
+
+.pad {
+  margin-left: 10px;
+}
+
+.badge-num {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--brand);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .est-num {

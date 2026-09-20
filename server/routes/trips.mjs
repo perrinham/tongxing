@@ -88,19 +88,21 @@ import {
   ts
 } from '../lib/util.mjs'
 
-const ARRAY_KINDS = ['member', 'day', 'item', 'expense']
+const ARRAY_KINDS = ['member', 'day', 'item', 'expense', 'poll', 'vote']
 const ALL_KINDS = ['trip', ...ARRAY_KINDS]
 /** 集合名 → doc 里的键 */
-const DOC_KEY = { member: 'members', day: 'days', item: 'items', expense: 'expenses' }
+const DOC_KEY = { member: 'members', day: 'days', item: 'items', expense: 'expenses', poll: 'polls', vote: 'votes' }
 
 const ITEM_TYPES = ['spot', 'food', 'transport', 'stay', 'other']
 const EXPENSE_CATEGORIES = ['food', 'transport', 'stay', 'ticket', 'shopping', 'entertain', 'other']
 const SPLIT_MODES = ['even', 'weight', 'custom']
+const POLL_KINDS = ['date', 'destination']
+const POLL_STATUSES = ['open', 'closed']
 
 /** 单空间各类记录上限：防止有人灌爆存储 */
-const KIND_LIMITS = { member: 200, day: 400, item: 4000, expense: 4000 }
+const KIND_LIMITS = { member: 200, day: 400, item: 4000, expense: 4000, poll: 200, vote: 2000 }
 const MAX_TOTAL_RECORDS = 20000
-const KIND_TO_FIELD = { member: 'members', day: 'days', item: 'items', expense: 'expenses' }
+const KIND_TO_FIELD = { member: 'members', day: 'days', item: 'items', expense: 'expenses', poll: 'polls', vote: 'votes' }
 const MAX_TOMBSTONES = 3000
 
 function todayISO() {
@@ -258,11 +260,61 @@ function normExpense(raw, tripId) {
   )
 }
 
+function normPoll(raw, tripId) {
+  if (!isPlainObject(raw) || !isSafeId(raw.id)) return null
+  const created = ts(raw.createdAt)
+  const updatedAt = ts(raw.updatedAt, created)
+  const options = Array.isArray(raw.options) ? [] : null
+  if (options) {
+    const seen = new Set()
+    for (const o of raw.options.slice(0, 50)) {
+      if (!isPlainObject(o)) continue
+      const id = str(o.id, 64)
+      const label = str(o.label, 40)
+      if (!id || !label || seen.has(id)) continue
+      seen.add(id)
+      options.push({ id, label: label.slice(0, 40) })
+    }
+  }
+  const p = {
+    id: raw.id,
+    tripId,
+    kind: oneOf(raw.kind, POLL_KINDS, 'destination'),
+    title: str(raw.title, 40, '投票') || '投票',
+    options,
+    status: oneOf(raw.status, POLL_STATUSES, 'open'),
+    createdAt: created,
+    updatedAt,
+    hlc: recordHlc(raw.hlc, updatedAt)
+  }
+  if (raw.result !== undefined) p.result = str(raw.result, 64)
+  return withFhlc(p, raw)
+}
+
+function normVote(raw, tripId) {
+  if (!isPlainObject(raw) || !isSafeId(raw.id)) return null
+  const updatedAt = ts(raw.updatedAt)
+  return withFhlc(
+    {
+      id: raw.id,
+      tripId,
+      pollId: str(raw.pollId, 64),
+      memberId: str(raw.memberId, 64),
+      optionId: str(raw.optionId, 64),
+      updatedAt,
+      hlc: recordHlc(raw.hlc, updatedAt)
+    },
+    raw
+  )
+}
+
 const NORMALIZER = {
   member: normMember,
   day: normDay,
   item: normItem,
-  expense: normExpense
+  expense: normExpense,
+  poll: normPoll,
+  vote: normVote
 }
 
 /** 把请求体里的 doc 归一成可信结构；返回 null 表示整体非法 */
@@ -273,7 +325,9 @@ function normDoc(raw, spaceId) {
     members: [],
     days: [],
     items: [],
-    expenses: []
+    expenses: [],
+    polls: [],
+    votes: []
   }
   if (!out.trip) return null
 
@@ -475,7 +529,9 @@ function digestOf(space) {
     members: [...doc.members].sort(byId),
     days: [...doc.days].sort(byId),
     items: [...doc.items].sort(byId),
-    expenses: [...doc.expenses].sort(byId)
+    expenses: [...(doc.expenses || [])].sort(byId),
+    polls: [...(doc.polls || [])].sort(byId),
+    votes: [...(doc.votes || [])].sort(byId)
   }
   const tombs = [...space.tombstones].sort((a, b) =>
     a.kind === b.kind ? cmpStr(String(a.id), String(b.id)) : cmpStr(String(a.kind), String(b.kind))
@@ -489,7 +545,7 @@ function digestOf(space) {
 }
 
 function emptyDoc() {
-  return { trip: null, members: [], days: [], items: [], expenses: [] }
+  return { trip: null, members: [], days: [], items: [], expenses: [], polls: [], votes: [] }
 }
 
 function newSpace(id, author, ownerOpenid = '') {
@@ -551,7 +607,9 @@ export function createTripsRouter({
         members: space.doc.members.length,
         days: space.doc.days.length,
         items: space.doc.items.length,
-        expenses: space.doc.expenses.length
+        expenses: space.doc.expenses.length,
+        polls: space.doc.polls.length,
+        votes: space.doc.votes.length
       }
     }
   }

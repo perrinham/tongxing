@@ -14,6 +14,7 @@ export const ROUTES: Record<string, string> = {
   'expense-edit': '/pages/ExpenseEditPage',
   'item-edit': '/pages/ItemEditPage',
   'trip-members': '/pages/MembersPage',
+  poll: '/pages/PollPage',
   map: '/pages/MapPage',
   'city-map': '/pages/CityMapPage',
   'my-guides': '/pages/MyGuidesPage',

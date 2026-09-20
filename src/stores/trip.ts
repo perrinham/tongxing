@@ -4,6 +4,8 @@ import type {
   Expense,
   ItineraryItem,
   Member,
+  Poll,
+  PollKind,
   PushResult,
   SettlementResult,
   SyncEntityKind,
@@ -11,13 +13,15 @@ import type {
   Tombstone,
   Trip,
   TripDoc,
-  TripSpaceFull
+  TripSpaceFull,
+  Vote
 } from '@/types'
 import { storageFor, emptySyncMeta } from '@/repository/storage'
 import { uid } from '@/utils/id'
 import { useCityStore } from '@/stores/city'
 import { addDays, daysBetween, todayISO, avatarColor } from '@/utils/format'
 import { generateItinerary, generateItineraryAsync, type GenerateInput, type GenerateOutput } from '@/utils/itinerary'
+import { tallyOf, type PollTally } from '@/utils/poll'
 import { settle as runSettle } from '@/utils/settlement'
 import { createBackend, BackendError, type BackendClient } from '@/services/backend'
 import { identityValid, loginWithWechat } from '@/services/identity'
@@ -78,6 +82,8 @@ interface State {
   days: Day[]
   items: ItineraryItem[]
   expenses: Expense[]
+  polls: Poll[]
+  votes: Vote[]
   activeTripId: string | null
   ready: boolean
   /** 同步元数据（设备号 / 版本号 / 分享码 / 待上报墓碑 / 上次同步状态） */
@@ -165,6 +171,8 @@ export const useTripStore = defineStore('trip', {
     days: [],
     items: [],
     expenses: [],
+    polls: [],
+    votes: [],
     activeTripId: null,
     ready: false,
     // 与 storage.emptySyncMeta() 同一口径（默认值只在 storage.ts 的 spec 里写一份），
@@ -198,6 +206,29 @@ export const useTripStore = defineStore('trip', {
         this.expenses
           .filter((e) => e.tripId === tripId)
           .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : b.createdAt - a.createdAt))
+    },
+    pollsOf(): (tripId: string) => Poll[] {
+      return (tripId: string) =>
+        this.polls.filter((p) => p.tripId === tripId).sort((a, b) => b.createdAt - a.createdAt)
+    },
+    votesOf(): (pollId: string) => Vote[] {
+      return (pollId: string) => this.votes.filter((v) => v.pollId === pollId)
+    },
+    /** 某次投票的计票投影（实名票 + 分布 + 胜者）；不存在返回 null */
+    tallyOf(): (pollId: string) => PollTally | null {
+      return (pollId: string) => {
+        const poll = this.polls.find((p) => p.id === pollId)
+        if (!poll) return null
+        return tallyOf(poll, this.votes.filter((v) => v.pollId === pollId), this.members)
+      }
+    },
+    /** 当前成员在某次投票里投的选项 */
+    myVoteOf(): (pollId: string) => string | null {
+      return (pollId: string) => {
+        const self = this.members.find((m) => m.isSelf)
+        if (!self) return null
+        return this.votes.find((v) => v.pollId === pollId && v.memberId === self.id)?.optionId ?? null
+      }
     },
     /** 行程预估花费（按行程项 cost × 人数） */
     estimateOf(): (tripId: string) => number {
@@ -319,6 +350,8 @@ export const useTripStore = defineStore('trip', {
         days: this.days,
         items: this.items,
         expenses: this.expenses,
+        polls: this.polls,
+        votes: this.votes,
         activeTripId: this.activeTripId
       })
       storageFor(this).touch()
@@ -471,7 +504,9 @@ export const useTripStore = defineStore('trip', {
         ...this.members.filter((r) => r.tripId === tripId),
         ...this.days.filter((r) => r.tripId === tripId),
         ...this.items.filter((r) => r.tripId === tripId),
-        ...this.expenses.filter((r) => r.tripId === tripId)
+        ...this.expenses.filter((r) => r.tripId === tripId),
+        ...this.polls.filter((r) => r.tripId === tripId),
+        ...this.votes.filter((r) => r.tripId === tripId)
       ]
       for (const r of recs) {
         const keys = dataKeysOf(r)
@@ -642,6 +677,8 @@ export const useTripStore = defineStore('trip', {
       this.items = this.items.filter((i) => i.tripId !== id && !dayIds.has(i.dayId))
       this.members = this.members.filter((m) => m.tripId !== id)
       this.expenses = this.expenses.filter((e) => e.tripId !== id)
+      this.polls = this.polls.filter((p) => p.tripId !== id)
+      this.votes = this.votes.filter((v) => v.tripId !== id)
       if (this.activeTripId === id) {
         this.activeTripId = this.tripsSorted[0]?.id || null
       }
@@ -741,6 +778,123 @@ export const useTripStore = defineStore('trip', {
       // 被牵连的账单只改了付款人 / 参与人，其余字段（金额、备注…）不该跟着变旧
       this.stampFields(touched, ['payerId', 'participants'])
       this.addTombstone('member', id, tripId)
+      this.commit(tripId)
+    },
+
+    // ---------- 投票 ----------
+
+    /**
+     * 发起一次投票：候选由发起人手动列出（日期 = 若干 'YYYY-MM-DD'，目的地 = 城市名）。
+     * 重复标签、空白标签会被过滤；全部非法则返回 null。
+     */
+    createPoll(input: {
+      tripId: string
+      kind: PollKind
+      title?: string
+      options: string[]
+    }): string | null {
+      const trip = this.trips.find((t) => t.id === input.tripId)
+      if (!trip) return null
+      const seen = new Set<string>()
+      const labels: string[] = []
+      for (const label of input.options) {
+        const clean = (label || '').trim()
+        if (!clean || seen.has(clean)) continue
+        seen.add(clean)
+        labels.push(clean)
+      }
+      if (!labels.length) return null
+      const poll: Poll = {
+        id: uid('poll'),
+        tripId: input.tripId,
+        kind: input.kind,
+        title: (input.title || '').trim() || (input.kind === 'date' ? '哪天出发？' : '去哪儿？'),
+        options: labels.map((label) => ({ id: uid('opt'), label })),
+        status: 'open',
+        createdAt: Date.now(),
+        updatedAt: Date.now()
+      }
+      this.polls.push(poll)
+      this.stamp(poll)
+      this.commit(input.tripId)
+      return poll.id
+    },
+
+    /**
+     * 投票 / 改票：每成员每投票一票（Vote.id = `${pollId}_${memberId}`），改票覆盖自己的旧票。
+     * id 用下划线拼接是因为服务端 isSafeId 的字符集是 `[A-Za-z0-9_-]`，冒号会整条被拒。
+     */
+    castVote(pollId: string, memberId: string, optionId: string) {
+      const poll = this.polls.find((p) => p.id === pollId)
+      if (!poll || poll.status !== 'open') return
+      if (!poll.options.some((o) => o.id === optionId)) return
+      const tripId = poll.tripId
+      const vote = this.votes.find((v) => v.pollId === pollId && v.memberId === memberId)
+      if (vote) {
+        if (vote.optionId === optionId) return
+        vote.optionId = optionId
+        this.stampFields([vote], ['optionId'])
+      } else {
+        const v: Vote = {
+          id: `${pollId}_${memberId}`,
+          tripId,
+          pollId,
+          memberId,
+          optionId,
+          updatedAt: Date.now()
+        }
+        this.stamp(v)
+        this.votes.push(v)
+      }
+      this.commit(tripId)
+    },
+
+    /** 结束投票：定格胜者（无票时不动 result，留着等应用按钮） */
+    closePoll(pollId: string) {
+      const poll = this.polls.find((p) => p.id === pollId)
+      if (!poll || poll.status === 'closed') return
+      const t = this.tallyOf(pollId)
+      poll.status = 'closed'
+      if (t?.winner && !poll.result) poll.result = t.winner.option.id
+      this.stampFields([poll], ['status', ...(poll.result ? ['result'] : [])])
+      this.commit(poll.tripId)
+    },
+
+    /**
+     * 把已结束投票的结果应用到行程：
+     *   · date 投票：候选日期写入 startDate，endDate 按行程原天数顺延；
+     *   · destination 投票：候选城市写入 destination。
+     * 仅投票 closed 且已有采纳结果时可应用。
+     */
+    applyPollResult(pollId: string) {
+      const poll = this.polls.find((p) => p.id === pollId)
+      if (!poll || poll.status !== 'closed' || !poll.result) return
+      const trip = this.trips.find((t) => t.id === poll.tripId)
+      const option = poll.options.find((o) => o.id === poll.result)
+      if (!trip || !option) return
+      if (poll.kind === 'destination') {
+        trip.destination = option.label
+        this.stampFields([trip], ['destination'])
+      } else {
+        const days = daysBetween(trip.startDate, trip.endDate)
+        trip.startDate = option.label
+        trip.endDate = addDays(option.label, days - 1)
+        this.stampFields([trip], ['startDate', 'endDate'])
+      }
+      this.commit(poll.tripId)
+    },
+
+    /** 删除投票：连带它的票一起删（各自墓碑，防止离线旧快照复活） */
+    removePoll(pollId: string) {
+      const poll = this.polls.find((p) => p.id === pollId)
+      if (!poll) return
+      const tripId = poll.tripId
+      for (const v of this.votes.filter((x) => x.pollId === pollId)) {
+        this.addTombstone('vote', v.id, tripId)
+      }
+      this.votes = this.votes.filter((x) => x.pollId !== pollId)
+      this.addTombstone('poll', pollId, tripId)
+      this.polls = this.polls.filter((p) => p.id !== pollId)
       this.commit(tripId)
     },
 
@@ -1043,6 +1197,8 @@ export const useTripStore = defineStore('trip', {
       this.days = []
       this.items = []
       this.expenses = []
+      this.polls = []
+      this.votes = []
       this.activeTripId = null
       this.sync = {
         ...emptySyncMeta(),
@@ -1421,7 +1577,9 @@ export const useTripStore = defineStore('trip', {
         members: this.members.filter((m) => m.tripId === tripId),
         days: this.days.filter((d) => d.tripId === tripId),
         items: this.items.filter((i) => i.tripId === tripId),
-        expenses: this.expenses.filter((e) => e.tripId === tripId)
+        expenses: this.expenses.filter((e) => e.tripId === tripId),
+        polls: this.polls.filter((p) => p.tripId === tripId),
+        votes: this.votes.filter((v) => v.tripId === tripId)
       }
     },
 
@@ -1449,6 +1607,8 @@ export const useTripStore = defineStore('trip', {
       const localDays = this.days.filter((r) => r.tripId === tripId)
       const localItems = this.items.filter((r) => r.tripId === tripId)
       const localExpenses = this.expenses.filter((r) => r.tripId === tripId)
+      const localPolls = this.polls.filter((r) => r.tripId === tripId)
+      const localVotes = this.votes.filter((r) => r.tripId === tripId)
 
       // 先无条件摘掉这个行程的所有本地记录，下面再按合并结果放回去
       this.trips = this.trips.filter((t) => t.id !== tripId)
@@ -1456,6 +1616,8 @@ export const useTripStore = defineStore('trip', {
       this.days = this.days.filter((r) => r.tripId !== tripId)
       this.items = this.items.filter((r) => r.tripId !== tripId)
       this.expenses = this.expenses.filter((r) => r.tripId !== tripId)
+      this.polls = this.polls.filter((r) => r.tripId !== tripId)
+      this.votes = this.votes.filter((r) => r.tripId !== tripId)
 
       if (deleted || !doc || !doc.trip) {
         if (this.activeTripId === tripId) {
@@ -1551,6 +1713,8 @@ export const useTripStore = defineStore('trip', {
       this.days = [...this.days, ...mergeList('day', localDays, doc.days ?? [])]
       this.items = [...this.items, ...mergeList('item', localItems, doc.items ?? [])]
       this.expenses = [...this.expenses, ...mergeList('expense', localExpenses, doc.expenses ?? [])]
+      this.polls = [...this.polls, ...mergeList('poll', localPolls, doc.polls ?? [])]
+      this.votes = [...this.votes, ...mergeList('vote', localVotes, doc.votes ?? [])]
       this.persist({ sync: false })
     },
 
