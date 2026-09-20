@@ -4,6 +4,7 @@ import { useTripStore } from '@/stores/trip'
 import { nav } from '@/utils/nav'
 import { CATEGORY_META, CANVAS_CATEGORY_COLORS, money, moneyBrief } from '@/utils/format'
 import type { PosterData } from '@/utils/poster'
+import { useToast } from '@/utils/toast'
 import AppNav from '@/components/AppNav.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import AppAvatar from '@/components/AppAvatar.vue'
@@ -21,7 +22,7 @@ const result = computed(() => (trip.value ? store.settlementOf(trip.value.id) : 
 const showPoster = ref(false)
 const posterData = ref<PosterData | null>(null)
 const posterRef = ref<InstanceType<typeof PosterCanvas> | null>(null)
-const toast = ref('')
+const { toast, toastShow } = useToast()
 
 const settled = computed(() => !!trip.value?.settledAt)
 
@@ -69,14 +70,8 @@ async function copyText() {
   const text = shareText()
   uni.setClipboardData({
     data: text,
-    success: () => {
-      toast.value = '结算文案已复制'
-      setTimeout(() => (toast.value = ''), 1800)
-    },
-    fail: () => {
-      toast.value = '复制失败'
-      setTimeout(() => (toast.value = ''), 1800)
-    }
+    success: () => toastShow('结算文案已复制'),
+    fail: () => toastShow('复制失败')
   })
 }
 
@@ -118,13 +113,11 @@ function downloadPoster() {
 
 // H5 端是下载文件而不是存相册，文案由 PosterCanvas 带过来
 function onPosterSaved(text?: string) {
-  toast.value = text || '已保存到相册'
-  setTimeout(() => (toast.value = ''), 1800)
+  toastShow(text || '已保存到相册')
 }
 
 function onPosterError(msg: string) {
-  toast.value = msg
-  setTimeout(() => (toast.value = ''), 1800)
+  toastShow(msg)
 }
 
 function toggleSettled() {

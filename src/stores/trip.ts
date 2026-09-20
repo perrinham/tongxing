@@ -1306,8 +1306,13 @@ export const useTripStore = defineStore('trip', {
         return
       }
       st.pulling.add(tripId)
+      // 失败要留痕：设计上靠「下次通知 / 冷启动重拉」自愈，但连 warn 都没有的话，
+      // 「不报错、只是不对」这类问题（同步没跟上）在排查时一条线索都不会有
       void this.pullSpace(tripId)
-        .catch(() => false)
+        .catch((e) => {
+          console.warn('[sync] 实时通知触发的拉取失败，等待下次通知/冷启动自愈', tripId, e)
+          return false
+        })
         .then(() => {
           st.pulling.delete(tripId)
           // 飞行期间又变过 → 再拉一次，并且这次不再排下一轮（改动已包含在新快照里）

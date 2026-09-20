@@ -5,6 +5,7 @@ import { useTripStore } from '@/stores/trip'
 import { SYNC_ENABLED } from '@/config'
 import { nav } from '@/utils/nav'
 import { moneyBrief, shortDate } from '@/utils/format'
+import { useToast } from '@/utils/toast'
 import AppNav from '@/components/AppNav.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import AppAvatar from '@/components/AppAvatar.vue'
@@ -18,13 +19,8 @@ const active = computed(() => store.activeTrip)
 
 const showImport = ref(false)
 const importText = ref('')
-const toast = ref('')
 const confirmReset = ref(false)
-
-function toastShow(msg: string) {
-  toast.value = msg
-  setTimeout(() => (toast.value = ''), 1800)
-}
+const { toast, toastShow } = useToast()
 
 function switchTrip(id: string) {
   store.setActiveTrip(id)

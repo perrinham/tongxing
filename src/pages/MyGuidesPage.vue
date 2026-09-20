@@ -6,6 +6,7 @@ import { useTripStore } from '@/stores/trip'
 import { BACKEND_ENABLED } from '@/config'
 import { nav } from '@/utils/nav'
 import { shortIdentity } from '@/services/identity'
+import { useToast } from '@/utils/toast'
 import type { CityGuide } from '@/types'
 import AppNav from '@/components/AppNav.vue'
 import AppEmpty from '@/components/AppEmpty.vue'
@@ -30,7 +31,7 @@ const loading = ref(false)
 const errMsg = ref('')
 const tab = ref<'all' | 'visited' | 'wish'>('all')
 const busyId = ref('')
-const toast = ref('')
+const { toast, toastShow } = useToast()
 
 /** 待确认撤回的记录（撤销是破坏性的，必须让人看清撤的是哪一条） */
 const pending = ref<CityGuide | null>(null)
@@ -40,11 +41,6 @@ const openid = computed(() =>
   tripStore.isLoggedIn() ? String(tripStore.sync.identity?.openid || '') : ''
 )
 const who = computed(() => shortIdentity(tripStore.sync.identity))
-
-function toastShow(msg: string) {
-  toast.value = msg
-  setTimeout(() => (toast.value = ''), 1800)
-}
 
 async function load() {
   // 未登录 / 未启用云同步时不发请求：后端对这两者分别返回 401 / 不可达，

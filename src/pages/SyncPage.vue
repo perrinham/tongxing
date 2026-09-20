@@ -5,6 +5,7 @@ import { useTripStore } from '@/stores/trip'
 import { BACKEND_BASE_URL, SYNC_ENABLED } from '@/config'
 import { loginErrorText, shortIdentity } from '@/services/identity'
 import type { ClaimAllResult } from '@/stores/trip'
+import { useToast } from '@/utils/toast'
 import AppNav from '@/components/AppNav.vue'
 import AppIcon from '@/components/AppIcon.vue'
 
@@ -15,7 +16,7 @@ const joinCode = ref('')
 const joinMsg = ref('')
 const busy = ref(false)
 const online = ref<boolean | null>(null)
-const toast = ref('')
+const { toast, toastShow } = useToast()
 
 // 账号（微信 openid）
 const loggedIn = computed(() => store.isLoggedIn())
@@ -58,11 +59,6 @@ const desc = computed(() => {
       return dirtyCount.value ? `有 ${dirtyCount.value} 个行程还没同步过` : '还没有同步过'
   }
 })
-
-function toastShow(msg: string) {
-  toast.value = msg
-  setTimeout(() => (toast.value = ''), 1800)
-}
 
 async function probe() {
   online.value = null
