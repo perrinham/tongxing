@@ -80,9 +80,14 @@ const openPolls = computed(() =>
   trip.value ? store.pollsOf(trip.value.id).filter((p) => p.status === 'open') : []
 )
 const allPolls = computed(() => (trip.value ? store.pollsOf(trip.value.id) : []))
+const meetup = computed(() => (trip.value ? store.meetupOf(trip.value.id) : null))
 
 function goPolls() {
   if (trip.value) nav.to('poll', { id: trip.value.id })
+}
+
+function goMeetup() {
+  if (trip.value) nav.to('meetup', { id: trip.value.id })
 }
 
 function pickDay(id: string) {
@@ -220,6 +225,15 @@ function goMap() {
             <span class="grow" />
             <span v-if="openPolls.length" class="badge-num">{{ openPolls.length }}</span>
             <span v-else-if="allPolls.length" class="row-value">已结束</span>
+            <AppIcon name="right" :size="15" color="var(--text-tertiary)" />
+          </button>
+          <div class="list-sep" />
+          <button class="list-row" @click="goMeetup">
+            <AppIcon name="location" :size="18" color="var(--text-secondary)" />
+            <span class="pad">集合点</span>
+            <span class="grow" />
+            <span v-if="meetup" class="row-value meetup-val ellipsis">{{ meetup.title }}</span>
+            <span v-else class="row-value">未定</span>
             <AppIcon name="right" :size="15" color="var(--text-tertiary)" />
           </button>
           <div class="list-sep" />
@@ -384,6 +398,13 @@ function goMap() {
 .row-value {
   font-size: 15px;
   color: var(--text-secondary);
+}
+
+/* 集合点名可能很长：限宽 + 省略，不让它把 chevron 挤出可视区 */
+.meetup-val {
+  max-width: 36vw;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .pad {

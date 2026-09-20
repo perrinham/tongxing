@@ -88,10 +88,9 @@ import {
   ts
 } from '../lib/util.mjs'
 
-const ARRAY_KINDS = ['member', 'day', 'item', 'expense', 'poll', 'vote']
+const ARRAY_KINDS = ['member', 'day', 'item', 'expense', 'poll', 'vote', 'meetup', 'location']
 const ALL_KINDS = ['trip', ...ARRAY_KINDS]
-/** 集合名 → doc 里的键 */
-const DOC_KEY = { member: 'members', day: 'days', item: 'items', expense: 'expenses', poll: 'polls', vote: 'votes' }
+const DOC_KEY = { member: 'members', day: 'days', item: 'items', expense: 'expenses', poll: 'polls', vote: 'votes', meetup: 'meetups', location: 'locations' }
 
 const ITEM_TYPES = ['spot', 'food', 'transport', 'stay', 'other']
 const EXPENSE_CATEGORIES = ['food', 'transport', 'stay', 'ticket', 'shopping', 'entertain', 'other']
@@ -100,9 +99,9 @@ const POLL_KINDS = ['date', 'destination']
 const POLL_STATUSES = ['open', 'closed']
 
 /** 单空间各类记录上限：防止有人灌爆存储 */
-const KIND_LIMITS = { member: 200, day: 400, item: 4000, expense: 4000, poll: 200, vote: 2000 }
+const KIND_LIMITS = { member: 200, day: 400, item: 4000, expense: 4000, poll: 200, vote: 2000, meetup: 20, location: 200 }
 const MAX_TOTAL_RECORDS = 20000
-const KIND_TO_FIELD = { member: 'members', day: 'days', item: 'items', expense: 'expenses', poll: 'polls', vote: 'votes' }
+const KIND_TO_FIELD = { member: 'members', day: 'days', item: 'items', expense: 'expenses', poll: 'polls', vote: 'votes', meetup: 'meetups', location: 'locations' }
 const MAX_TOMBSTONES = 3000
 
 function todayISO() {
@@ -308,13 +307,55 @@ function normVote(raw, tripId) {
   )
 }
 
+/** 集合点：每行程至多一条（id = `meetup_<tripId>`），改了就更新 */
+function normMeetup(raw, tripId) {
+  if (!isPlainObject(raw) || !isSafeId(raw.id)) return null
+  const created = ts(raw.createdAt)
+  const updatedAt = ts(raw.updatedAt, created)
+  return withFhlc(
+    {
+      id: raw.id,
+      tripId,
+      title: str(raw.title, 60, '集合点') || '集合点',
+      address: str(raw.address, 120),
+      lat: num(raw.lat, -90, 90, 0),
+      lng: num(raw.lng, -180, 180, 0),
+      createdAt: created,
+      updatedAt,
+      hlc: recordHlc(raw.hlc, updatedAt)
+    },
+    raw
+  )
+}
+
+/** 成员实时位置：每成员一条（id = `loc_<memberId>`），记录存在 = 正在共享 */
+function normLocation(raw, tripId) {
+  if (!isPlainObject(raw) || !isSafeId(raw.id)) return null
+  const updatedAt = ts(raw.updatedAt)
+  return withFhlc(
+    {
+      id: raw.id,
+      tripId,
+      memberId: str(raw.memberId, 64),
+      lat: num(raw.lat, -90, 90, 0),
+      lng: num(raw.lng, -180, 180, 0),
+      accuracy: num(raw.accuracy, 0, 1e6, 0),
+      updatedAt,
+      hlc: recordHlc(raw.hlc, updatedAt)
+    },
+    raw
+  )
+}
+
 const NORMALIZER = {
   member: normMember,
   day: normDay,
   item: normItem,
   expense: normExpense,
   poll: normPoll,
-  vote: normVote
+  vote: normVote,
+  meetup: normMeetup,
+  location: normLocation
 }
 
 /** 把请求体里的 doc 归一成可信结构；返回 null 表示整体非法 */
@@ -327,7 +368,9 @@ function normDoc(raw, spaceId) {
     items: [],
     expenses: [],
     polls: [],
-    votes: []
+    votes: [],
+    meetups: [],
+    locations: []
   }
   if (!out.trip) return null
 
@@ -531,7 +574,9 @@ function digestOf(space) {
     items: [...doc.items].sort(byId),
     expenses: [...(doc.expenses || [])].sort(byId),
     polls: [...(doc.polls || [])].sort(byId),
-    votes: [...(doc.votes || [])].sort(byId)
+    votes: [...(doc.votes || [])].sort(byId),
+    meetups: [...(doc.meetups || [])].sort(byId),
+    locations: [...(doc.locations || [])].sort(byId)
   }
   const tombs = [...space.tombstones].sort((a, b) =>
     a.kind === b.kind ? cmpStr(String(a.id), String(b.id)) : cmpStr(String(a.kind), String(b.kind))
@@ -545,7 +590,7 @@ function digestOf(space) {
 }
 
 function emptyDoc() {
-  return { trip: null, members: [], days: [], items: [], expenses: [], polls: [], votes: [] }
+  return { trip: null, members: [], days: [], items: [], expenses: [], polls: [], votes: [], meetups: [], locations: [] }
 }
 
 function newSpace(id, author, ownerOpenid = '') {
@@ -609,7 +654,9 @@ export function createTripsRouter({
         items: space.doc.items.length,
         expenses: space.doc.expenses.length,
         polls: space.doc.polls.length,
-        votes: space.doc.votes.length
+        votes: space.doc.votes.length,
+        meetups: space.doc.meetups.length,
+        locations: space.doc.locations.length
       }
     }
   }

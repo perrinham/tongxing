@@ -3,6 +3,8 @@ import type {
   Day,
   Expense,
   ItineraryItem,
+  LocationShare,
+  Meetup,
   Member,
   Poll,
   PollKind,
@@ -84,6 +86,8 @@ interface State {
   expenses: Expense[]
   polls: Poll[]
   votes: Vote[]
+  meetups: Meetup[]
+  locations: LocationShare[]
   activeTripId: string | null
   ready: boolean
   /** 同步元数据（设备号 / 版本号 / 分享码 / 待上报墓碑 / 上次同步状态） */
@@ -173,6 +177,8 @@ export const useTripStore = defineStore('trip', {
     expenses: [],
     polls: [],
     votes: [],
+    meetups: [],
+    locations: [],
     activeTripId: null,
     ready: false,
     // 与 storage.emptySyncMeta() 同一口径（默认值只在 storage.ts 的 spec 里写一份），
@@ -228,6 +234,22 @@ export const useTripStore = defineStore('trip', {
         const self = this.members.find((m) => m.isSelf)
         if (!self) return null
         return this.votes.find((v) => v.pollId === pollId && v.memberId === self.id)?.optionId ?? null
+      }
+    },
+    /** 某行程的集合点（每行程至多一条）；没定返回 null */
+    meetupOf(): (tripId: string) => Meetup | null {
+      return (tripId: string) => this.meetups.find((m) => m.tripId === tripId) ?? null
+    },
+    /** 某行程所有成员的当前位置（记录存在 = 正在共享） */
+    memberLocationsOf(): (tripId: string) => LocationShare[] {
+      return (tripId: string) => this.locations.filter((l) => l.tripId === tripId)
+    },
+    /** 本机是否正在共享某行程的位置（= 有我的位置记录） */
+    isSharingLocation(): (tripId: string) => boolean {
+      return (tripId: string) => {
+        const self = this.members.find((m) => m.isSelf && m.tripId === tripId)
+        if (!self) return false
+        return this.locations.some((l) => l.tripId === tripId && l.memberId === self.id)
       }
     },
     /** 行程预估花费（按行程项 cost × 人数） */
@@ -320,6 +342,10 @@ export const useTripStore = defineStore('trip', {
       this.days = s.days
       this.items = s.items
       this.expenses = s.expenses
+      this.polls = s.polls
+      this.votes = s.votes
+      this.meetups = s.meetups
+      this.locations = s.locations
       this.activeTripId = s.activeTripId
       if (!this.activeTripId && this.trips.length) {
         this.activeTripId = this.tripsSorted[0].id
@@ -352,6 +378,8 @@ export const useTripStore = defineStore('trip', {
         expenses: this.expenses,
         polls: this.polls,
         votes: this.votes,
+        meetups: this.meetups,
+        locations: this.locations,
         activeTripId: this.activeTripId
       })
       storageFor(this).touch()
@@ -506,7 +534,9 @@ export const useTripStore = defineStore('trip', {
         ...this.items.filter((r) => r.tripId === tripId),
         ...this.expenses.filter((r) => r.tripId === tripId),
         ...this.polls.filter((r) => r.tripId === tripId),
-        ...this.votes.filter((r) => r.tripId === tripId)
+        ...this.votes.filter((r) => r.tripId === tripId),
+        ...this.meetups.filter((r) => r.tripId === tripId),
+        ...this.locations.filter((r) => r.tripId === tripId)
       ]
       for (const r of recs) {
         const keys = dataKeysOf(r)
@@ -679,6 +709,8 @@ export const useTripStore = defineStore('trip', {
       this.expenses = this.expenses.filter((e) => e.tripId !== id)
       this.polls = this.polls.filter((p) => p.tripId !== id)
       this.votes = this.votes.filter((v) => v.tripId !== id)
+      this.meetups = this.meetups.filter((m) => m.tripId !== id)
+      this.locations = this.locations.filter((l) => l.tripId !== id)
       if (this.activeTripId === id) {
         this.activeTripId = this.tripsSorted[0]?.id || null
       }
@@ -895,6 +927,91 @@ export const useTripStore = defineStore('trip', {
       this.votes = this.votes.filter((x) => x.pollId !== pollId)
       this.addTombstone('poll', pollId, tripId)
       this.polls = this.polls.filter((p) => p.id !== pollId)
+      this.commit(tripId)
+    },
+
+    // ---------- 集合点 / 共享位置 ----------
+
+    /** 定/改集合点（每行程至多一条，id = `meetup_<tripId>`；改就是更新它） */
+    setMeetup(
+      tripId: string,
+      input: { title: string; address: string; lat: number; lng: number }
+    ) {
+      const trip = this.trips.find((t) => t.id === tripId)
+      if (!trip) return false
+      const cur = this.meetups.find((m) => m.tripId === tripId)
+      if (cur) {
+        cur.title = (input.title || '').trim() || '集合点'
+        cur.address = (input.address || '').trim()
+        cur.lat = input.lat
+        cur.lng = input.lng
+        this.stampFields([cur], ['title', 'address', 'lat', 'lng'])
+      } else {
+        const m: Meetup = {
+          id: `meetup_${tripId}`,
+          tripId,
+          title: (input.title || '').trim() || '集合点',
+          address: (input.address || '').trim(),
+          lat: input.lat,
+          lng: input.lng,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        }
+        this.stamp(m)
+        this.meetups.push(m)
+      }
+      this.commit(tripId)
+      return true
+    },
+
+    /** 清除集合点（墓碑；离线成员下次同步后也看不到它） */
+    removeMeetup(tripId: string) {
+      const cur = this.meetups.find((m) => m.tripId === tripId)
+      if (!cur) return
+      this.addTombstone('meetup', cur.id, tripId)
+      this.meetups = this.meetups.filter((m) => m.tripId !== tripId)
+      this.commit(tripId)
+    },
+
+    /**
+     * 上报本机位置（共享位置）：我自己在行程里的一条 `location` 记录，
+     * id = `loc_<memberId>`，更新即覆盖旧坐标，两个成员同时上报互不覆盖。
+     * 记录不存在时先创建（= 开启共享）。UI 层的定时器只负责周期性地调它。
+     */
+    updateLocation(tripId: string, lat: number, lng: number, accuracy = 0) {
+      const self = this.members.find((m) => m.isSelf && m.tripId === tripId)
+      if (!self) return false
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false
+      const cur = this.locations.find((l) => l.tripId === tripId && l.memberId === self.id)
+      if (cur) {
+        cur.lat = lat
+        cur.lng = lng
+        cur.accuracy = accuracy
+        this.stampFields([cur], ['lat', 'lng', 'accuracy'])
+      } else {
+        const l: LocationShare = {
+          id: `loc_${self.id}`,
+          tripId,
+          memberId: self.id,
+          lat,
+          lng,
+          accuracy,
+          updatedAt: Date.now()
+        }
+        this.stamp(l)
+        this.locations.push(l)
+      }
+      this.commit(tripId)
+      return true
+    },
+
+    /** 停止共享位置（删掉我的位置记录，墓碑同步；别人地图上不再显示我） */
+    stopSharing(tripId: string) {
+      const self = this.members.find((m) => m.isSelf && m.tripId === tripId)
+      const cur = self && this.locations.find((l) => l.tripId === tripId && l.memberId === self.id)
+      if (!cur) return
+      this.addTombstone('location', cur.id, tripId)
+      this.locations = this.locations.filter((l) => l.id !== cur.id)
       this.commit(tripId)
     },
 
@@ -1199,6 +1316,8 @@ export const useTripStore = defineStore('trip', {
       this.expenses = []
       this.polls = []
       this.votes = []
+      this.meetups = []
+      this.locations = []
       this.activeTripId = null
       this.sync = {
         ...emptySyncMeta(),
@@ -1579,7 +1698,9 @@ export const useTripStore = defineStore('trip', {
         items: this.items.filter((i) => i.tripId === tripId),
         expenses: this.expenses.filter((e) => e.tripId === tripId),
         polls: this.polls.filter((p) => p.tripId === tripId),
-        votes: this.votes.filter((v) => v.tripId === tripId)
+        votes: this.votes.filter((v) => v.tripId === tripId),
+        meetups: this.meetups.filter((m) => m.tripId === tripId),
+        locations: this.locations.filter((l) => l.tripId === tripId)
       }
     },
 
@@ -1609,6 +1730,8 @@ export const useTripStore = defineStore('trip', {
       const localExpenses = this.expenses.filter((r) => r.tripId === tripId)
       const localPolls = this.polls.filter((r) => r.tripId === tripId)
       const localVotes = this.votes.filter((r) => r.tripId === tripId)
+      const localMeetups = this.meetups.filter((r) => r.tripId === tripId)
+      const localLocations = this.locations.filter((r) => r.tripId === tripId)
 
       // 先无条件摘掉这个行程的所有本地记录，下面再按合并结果放回去
       this.trips = this.trips.filter((t) => t.id !== tripId)
@@ -1618,6 +1741,8 @@ export const useTripStore = defineStore('trip', {
       this.expenses = this.expenses.filter((r) => r.tripId !== tripId)
       this.polls = this.polls.filter((r) => r.tripId !== tripId)
       this.votes = this.votes.filter((r) => r.tripId !== tripId)
+      this.meetups = this.meetups.filter((r) => r.tripId !== tripId)
+      this.locations = this.locations.filter((r) => r.tripId !== tripId)
 
       if (deleted || !doc || !doc.trip) {
         if (this.activeTripId === tripId) {
@@ -1649,7 +1774,11 @@ export const useTripStore = defineStore('trip', {
         ...(doc.members ?? []),
         ...(doc.days ?? []),
         ...(doc.items ?? []),
-        ...(doc.expenses ?? [])
+        ...(doc.expenses ?? []),
+        ...(doc.polls ?? []),
+        ...(doc.votes ?? []),
+        ...(doc.meetups ?? []),
+        ...(doc.locations ?? [])
       ])
       observeAll(serverTombstones.map((t) => ({ hlc: t.hlc, updatedAt: t.deletedAt })))
 
@@ -1715,6 +1844,8 @@ export const useTripStore = defineStore('trip', {
       this.expenses = [...this.expenses, ...mergeList('expense', localExpenses, doc.expenses ?? [])]
       this.polls = [...this.polls, ...mergeList('poll', localPolls, doc.polls ?? [])]
       this.votes = [...this.votes, ...mergeList('vote', localVotes, doc.votes ?? [])]
+      this.meetups = [...this.meetups, ...mergeList('meetup', localMeetups, doc.meetups ?? [])]
+      this.locations = [...this.locations, ...mergeList('location', localLocations, doc.locations ?? [])]
       this.persist({ sync: false })
     },
 

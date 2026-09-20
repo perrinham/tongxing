@@ -11,6 +11,7 @@
     { "path": "pages/SettlePage", "style": { "navigationStyle": "custom" } },
     { "path": "pages/MembersPage", "style": { "navigationStyle": "custom" } },
     { "path": "pages/PollPage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/MeetupPage", "style": { "navigationStyle": "custom" } },
     { "path": "pages/ProfilePage", "style": { "navigationStyle": "custom" } },
     { "path": "pages/MapPage", "style": { "navigationStyle": "custom" } },
     { "path": "pages/CityMapPage", "style": { "navigationStyle": "custom" } },

@@ -4,7 +4,7 @@ import { onLoad } from '@dcloudio/uni-app'
 import { useTripStore } from '@/stores/trip'
 import { walkingRoute, drivingRoute } from '@/services/amap'
 import { AMAP_ENABLED } from '@/config'
-import { shortDate, weekday, CANVAS_PALETTE, avatarInk } from '@/utils/format'
+import { shortDate, weekday, CANVAS_PALETTE, avatarColor, avatarInk } from '@/utils/format'
 import type { ItineraryItem } from '@/types'
 import AppNav from '@/components/AppNav.vue'
 
@@ -29,33 +29,96 @@ const geoItems = computed(() => {
   return store.itemsOfDay(day.value.id).filter((i) => i.lat && i.lng)
 })
 
+/** 集合点与共享中的成员位置（叠加在当日行程点之上） */
+const meetup = computed(() => (trip.value ? store.meetupOf(trip.value.id) : null))
+const memberLocs = computed(() => {
+  if (!trip.value) return []
+  const members = store.membersOf(trip.value.id)
+  return store.memberLocationsOf(trip.value.id).map((loc) => ({
+    loc,
+    member: members.find((m) => m.id === loc.memberId)
+  }))
+})
+
+/** marker 点击的载荷：按 marker 顺序对应，点谁开谁的 openLocation */
+const markerActs = computed(() => {
+  const acts: (
+    | { kind: 'item'; it: ItineraryItem }
+    | { kind: 'meetup'; name: string; address: string; lat: number; lng: number }
+    | { kind: 'member'; name: string; colorIndex: number; lat: number; lng: number }
+  )[] = geoItems.value.map((it) => ({ kind: 'item', it }))
+  if (meetup.value) {
+    acts.push({
+      kind: 'meetup',
+      name: meetup.value.title,
+      address: meetup.value.address,
+      lat: meetup.value.lat,
+      lng: meetup.value.lng
+    })
+  }
+  for (const ml of memberLocs.value) {
+    acts.push({
+      kind: 'member',
+      name: ml.member?.name || '成员',
+      colorIndex: ml.member?.colorIndex ?? 0,
+      lat: ml.loc.lat,
+      lng: ml.loc.lng
+    })
+  }
+  return acts
+})
+
 const center = computed(() => {
-  const it = geoItems.value[0]
+  const it = geoItems.value[0] ?? (meetup.value ? { lat: meetup.value.lat, lng: meetup.value.lng } : null) ??
+    (memberLocs.value[0] ? { lat: memberLocs.value[0].loc.lat, lng: memberLocs.value[0].loc.lng } : null)
   return it ? { latitude: it.lat, longitude: it.lng } : { latitude: 34.0, longitude: 108.0 }
 })
 
-const markers = computed(() =>
-  geoItems.value.map((it, i) => ({
-    id: i,
-    latitude: it.lat,
-    longitude: it.lng,
-    width: 22,
-    height: 22,
-    label: {
-      content: String(i + 1),
-      /* 序号标记：原来写死白字压品牌绿 = 3.18:1（按 1.4.11 图形线算刚好过，但它本质是
-         压在色块上的**数字**，没必要卡在线上）。改走 avatarInk → 黑字 6.60:1。
-         和城市地图的 callout 用同一个机制，两处不再有两种写法。 */
-      color: avatarInk(CANVAS_PALETTE.brand),
-      bgColor: CANVAS_PALETTE.brand,
-      padding: 4,
-      borderRadius: 8,
-      textAlign: 'center' as const,
-      anchorX: 0,
-      anchorY: -26
+/** 地图 label 文字：与 AppAvatar 同规则（中文末字 / 英文首字母），限 4 字 */
+function labelNameOf(name: string): string {
+  const n = (name || '?').trim()
+  if (!n) return '?'
+  const s = /[\u4e00-\u9fa5]/.test(n) ? n.slice(-1) : n.slice(0, 1).toUpperCase()
+  return s.slice(0, 4)
+}
+
+const markers = computed(() => {
+  let itemNo = 0
+  return markerActs.value.map((a, i) => {
+    const isItem = a.kind === 'item'
+    /* 底色按 marker 类别取：行程点 = 品牌绿（序号），集合点 = 强调橙（「集合」），
+       成员位置 = 各自头像色 + 名字，扫一眼能对上「同行的人」里的色块。
+       序号标记：原来写死白字压品牌绿 = 3.18:1 —— 压在色块上的文字必须走
+       avatarInk(底色)，和城市地图的 callout 用同一个机制，两处不再有两种写法。 */
+    const bg = isItem
+      ? CANVAS_PALETTE.brand
+      : a.kind === 'meetup'
+        ? CANVAS_PALETTE.accent
+        : avatarColor(a.colorIndex)
+    const content = isItem
+      ? String((itemNo += 1))
+      : a.kind === 'meetup'
+        ? '集合'
+        : labelNameOf(a.name)
+    return {
+      id: i,
+      latitude: isItem ? a.it.lat : a.lat,
+      longitude: isItem ? a.it.lng : a.lng,
+      width: 22,
+      height: 22,
+      label: {
+        content,
+        color: avatarInk(bg),
+        bgColor: bg,
+        padding: 4,
+        borderRadius: 8,
+        textAlign: 'center' as const,
+        anchorX: 0,
+        anchorY: -26
+      }
     }
-  }))
-)
+  })
+})
 
 const summary = computed(() => {
   if (!routeDist.value) return '暂未规划路线'
@@ -114,13 +177,23 @@ function switchMode(m: 'walking' | 'driving') {
 }
 
 function onMarkerTap(e: { detail: { markerId: number } }) {
-  const it = geoItems.value[e.detail.markerId] as ItineraryItem | undefined
-  if (!it) return
+  const a = markerActs.value[e.detail.markerId]
+  if (!a) return
+  if (a.kind === 'item') {
+    uni.openLocation({
+      latitude: a.it.lat,
+      longitude: a.it.lng,
+      name: a.it.title,
+      address: a.it.address || '',
+      fail: () => uni.showToast({ title: '无法打开地图', icon: 'none' })
+    })
+    return
+  }
   uni.openLocation({
-    latitude: it.lat,
-    longitude: it.lng,
-    name: it.title,
-    address: it.address || '',
+    latitude: a.lat,
+    longitude: a.lng,
+    name: a.kind === 'meetup' ? a.name : `${a.name}的位置`,
+    address: a.kind === 'meetup' ? a.address : '',
     fail: () => uni.showToast({ title: '无法打开地图', icon: 'none' })
   })
 }
@@ -144,7 +217,7 @@ onLoad((options: Record<string, any> | undefined) => {
 
     <div class="map-wrap">
       <map
-        v-if="geoItems.length"
+        v-if="geoItems.length || meetup || memberLocs.length"
         class="map"
         :latitude="center.latitude"
         :longitude="center.longitude"

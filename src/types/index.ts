@@ -178,8 +178,9 @@ export interface Poll {
 /**
  * 一张票：某成员在某个投票里选了哪个选项。
  *
- * id = `${pollId}:${memberId}` —— 成员与投票唯一对应，改票就是更新自己这条
+ * id = `${pollId}_${memberId}` —— 成员与投票唯一对应，改票就是更新自己这条
  * 记录（字段级并发安全，两个成员同时投互不覆盖）。
+ * ⚠️ 分隔符必须是下划线：服务端 isSafeId 字符集是 `[A-Za-z0-9_-]`，冒号会整条被拒。
  */
 export interface Vote {
   id: string
@@ -187,6 +188,63 @@ export interface Vote {
   pollId: string
   memberId: string
   optionId: string
+  updatedAt?: number
+  /** 本次修改的 HLC，参与云端 LWW 比较；老记录没有则回退用 updatedAt */
+  hlc?: Hlc
+  /**
+   * 字段级时间戳：每个可合并字段各带一个 HLC。
+   *
+   * 记录级 hlc 只能回答「这条记录谁最后改的」，答不了「哪个字段谁最后改的」——
+   * 于是两人分别改同一条记录的不同字段时会丢一边。有了这张映射就能逐字段比。
+   *
+   * **映射必须是完整的**（每个可合并字段都有值）：缺字段会退回记录级 hlc，
+   * 而记录级 hlc 是各字段戳的最大值，会被别的字段的编辑顶高 → 反而更容易盖掉别人。
+   * 老记录没有这个字段，整体退到记录级语义，不需要迁移。
+   */
+  fhlc?: Record<string, Hlc>
+}
+
+/** 集合点：行程里约定的一处汇合地点。每行程至多一条（id = `meetup_<tripId>`）。 */
+export interface Meetup {
+  id: string
+  tripId: string
+  /** 地点名称（如「春熙路地铁站 A 口」） */
+  title: string
+  address: string
+  lat: number
+  lng: number
+  createdAt: number
+  updatedAt?: number
+  /** 本次修改的 HLC，参与云端 LWW 比较；老记录没有则回退用 updatedAt */
+  hlc?: Hlc
+  /**
+   * 字段级时间戳：每个可合并字段各带一个 HLC。
+   *
+   * 记录级 hlc 只能回答「这条记录谁最后改的」，答不了「哪个字段谁最后改的」——
+   * 于是两人分别改同一条记录的不同字段时会丢一边。有了这张映射就能逐字段比。
+   *
+   * **映射必须是完整的**（每个可合并字段都有值）：缺字段会退回记录级 hlc，
+   * 而记录级 hlc 是各字段戳的最大值，会被别的字段的编辑顶高 → 反而更容易盖掉别人。
+   * 老记录没有这个字段，整体退到记录级语义，不需要迁移。
+   */
+  fhlc?: Record<string, Hlc>
+}
+
+/**
+ * 成员实时位置（共享）：每个人在行程里留一条当前位置。
+ *
+ * id = `loc_<memberId>` —— 成员与位置记录唯一对应，上报就是更新自己这条；
+ * 记录存在 = 正在共享，删除（墓碑）= 停止共享。
+ * ⚠️ id 里的分隔符用下划线：lww 的服务端 isSafeId 字符集是 `[A-Za-z0-9_-]`。
+ */
+export interface LocationShare {
+  id: string
+  tripId: string
+  memberId: string
+  lat: number
+  lng: number
+  /** 定位精度（米），来自 getLocation 的 accuracy；0 表示未知 */
+  accuracy?: number
   updatedAt?: number
   /** 本次修改的 HLC，参与云端 LWW 比较；老记录没有则回退用 updatedAt */
   hlc?: Hlc
@@ -335,6 +393,8 @@ export interface PersistShape {
   expenses: Expense[]
   polls: Poll[]
   votes: Vote[]
+  meetups: Meetup[]
+  locations: LocationShare[]
   activeTripId: string | null
 }
 
@@ -360,7 +420,7 @@ export interface Hlc {
 }
 
 /** 可参与同步的实体类型 */
-export type SyncEntityKind = 'trip' | 'member' | 'day' | 'item' | 'expense' | 'poll' | 'vote'
+export type SyncEntityKind = 'trip' | 'member' | 'day' | 'item' | 'expense' | 'poll' | 'vote' | 'meetup' | 'location'
 
 /**
  * 删除墓碑。
@@ -389,6 +449,8 @@ export interface TripDoc {
   expenses: Expense[]
   polls: Poll[]
   votes: Vote[]
+  meetups: Meetup[]
+  locations: LocationShare[]
 }
 
 /** 云端空间概要（列表用，不含文档体） */
@@ -403,7 +465,16 @@ export interface TripSpaceBrief {
   endDate: string
   updatedAt: number
   updatedBy: string
-  counts: { members: number; days: number; items: number; expenses: number; polls: number; votes: number }
+  counts: {
+    members: number
+    days: number
+    items: number
+    expenses: number
+    polls: number
+    votes: number
+    meetups: number
+    locations: number
+  }
 }
 
 /** 云端空间全量（含文档体与墓碑） */

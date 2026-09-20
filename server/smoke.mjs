@@ -561,6 +561,84 @@ try {
   const s10 = await M('POST', `/api/trips/${T}`, { author: 'Yuki', doc: null, tombstones: tb })
   ok(s10.data.changed === false, '重复推同一墓碑 -> changed:false（幂等）')
 
+  // ── 集合点 / 共享位置（meetup / location）──
+  // ⚠️ 时间戳全部取**过去**（t0 之前）：capHlc 只在比较时把超前时间戳封顶到服务器当前
+  // 时刻 —— 若 base 与 incoming 都是未来戳，两者会被封顶到同一个 now，平局保留 base，
+  // LWW 断言就永远走不到「incoming 赢」的分支。真实客户端的 HLC 走当前时钟不存在这个问题。
+  const mu0 = t0 - 300_000
+  const su1 = await M('POST', `/api/trips/${T}`, {
+    author: '阿哲',
+    doc: mkDoc({
+      meetups: [
+        { id: `meetup_${T}`, title: '春熙路地铁站 A 口', address: '成都市锦江区', lat: 30.657, lng: 104.081, createdAt: mu0, updatedAt: mu0 }
+      ],
+      locations: [
+        { id: 'loc_m1', memberId: 'm1', lat: 30.66, lng: 104.06, accuracy: 35, updatedAt: mu0 }
+      ]
+    })
+  })
+  ok(su1.data.doc.meetups.length === 1 && su1.data.doc.meetups[0].title === '春熙路地铁站 A 口', '集合点入库', su1.data.doc.meetups)
+  ok(su1.data.doc.locations.length === 1 && su1.data.doc.locations[0].memberId === 'm1', '位置记录入库', su1.data.doc.locations)
+  ok(su1.data.doc.locations[0].accuracy === 35, '位置精度字段保留', su1.data.doc.locations[0])
+  const suList = await M('GET', '/api/trips')
+  ok(suList.data.spaces[0].counts.meetups === 1, '列表 counts 带 meetup 计数', suList.data.spaces[0].counts)
+  ok(suList.data.spaces[0].counts.locations === 1, '列表 counts 带 location 计数', suList.data.spaces[0].counts)
+
+  // 改集合点（新值覆盖）；更旧的位置不覆盖
+  const mu1 = mu0 + 60_000
+  const su2 = await M('POST', `/api/trips/${T}`, {
+    author: 'Yuki',
+    doc: mkDoc({
+      meetups: [
+        { id: `meetup_${T}`, title: '天府广场', address: '', lat: 30.657, lng: 104.065, createdAt: mu0, updatedAt: mu1 }
+      ],
+      locations: [
+        { id: 'loc_m1', memberId: 'm1', lat: 0, lng: 0, accuracy: 0, updatedAt: mu0 - 1 }
+      ]
+    })
+  })
+  ok(su2.data.doc.meetups[0].title === '天府广场', '集合点新值覆盖（LWW）', su2.data.doc.meetups)
+  ok(su2.data.doc.locations[0].lat === 30.66, '更旧的位置不覆盖（LWW）', su2.data.doc.locations)
+
+  // 位置刷新（新 updatedAt 覆盖）
+  const su3 = await M('POST', `/api/trips/${T}`, {
+    author: '阿哲',
+    doc: mkDoc({
+      locations: [
+        { id: 'loc_m1', memberId: 'm1', lat: 30.67, lng: 104.07, accuracy: 20, updatedAt: mu1 }
+      ]
+    })
+  })
+  ok(su3.data.doc.locations[0].lat === 30.67, '位置刷新覆盖', su3.data.doc.locations)
+
+  // 停止共享 / 清除集合点 = 墓碑
+  const su4 = await M('POST', `/api/trips/${T}`, {
+    author: '阿哲',
+    tombstones: [
+      { kind: 'meetup', id: `meetup_${T}`, deletedAt: mu1 + 10_000 },
+      { kind: 'location', id: 'loc_m1', deletedAt: mu1 + 10_000 }
+    ]
+  })
+  ok(su4.data.doc.meetups.length === 0, '集合点墓碑生效', su4.data.doc.meetups)
+  ok(su4.data.doc.locations.length === 0, '位置墓碑生效（停止共享）', su4.data.doc.locations)
+
+  // 已删的不能被旧快照复活（推的是删除前的旧内容、旧时间戳）
+  const su5 = await M('POST', `/api/trips/${T}`, {
+    author: 'Yuki',
+    doc: mkDoc({
+      meetups: [
+        { id: `meetup_${T}`, title: '天府广场', address: '', lat: 30.657, lng: 104.065, createdAt: mu0, updatedAt: mu1 }
+      ],
+      locations: [
+        { id: 'loc_m1', memberId: 'm1', lat: 30.67, lng: 104.07, accuracy: 20, updatedAt: mu1 }
+      ]
+    })
+  })
+  ok(su5.data.doc.meetups.length === 0 && su5.data.doc.locations.length === 0, '已删的集合点/位置不被旧快照复活', {
+    meetups: su5.data.doc.meetups,
+    locations: su5.data.doc.locations
+  })
+
   // 列表 / 详情 / 删除
   const list = await M('GET', '/api/trips')
   ok(list.data.spaces?.length === 1, '列表返回 1 个空间', list.data.spaces?.length)

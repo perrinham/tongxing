@@ -47,8 +47,8 @@ const { DatabaseSync } = require('node:sqlite')
 const SCHEMA_VERSION = 2
 
 /** 集合名 → doc 里的键（与 routes/trips.mjs 保持一致） */
-const DOC_KEY = { member: 'members', day: 'days', item: 'items', expense: 'expenses', poll: 'polls', vote: 'votes' }
-const ARRAY_KINDS = ['member', 'day', 'item', 'expense', 'poll', 'vote']
+const DOC_KEY = { member: 'members', day: 'days', item: 'items', expense: 'expenses', poll: 'polls', vote: 'votes', meetup: 'meetups', location: 'locations' }
+const ARRAY_KINDS = ['member', 'day', 'item', 'expense', 'poll', 'vote', 'meetup', 'location']
 
 /** 攻略表里单独提列、其余进 data JSON 的字段 */
 const GUIDE_COLUMNS = ['status']
@@ -139,7 +139,7 @@ function parseJson(raw, fallback) {
 }
 
 function emptyDoc() {
-  return { trip: null, members: [], days: [], items: [], expenses: [], polls: [], votes: [] }
+  return { trip: null, members: [], days: [], items: [], expenses: [], polls: [], votes: [], meetups: [], locations: [] }
 }
 
 /**
@@ -238,7 +238,11 @@ export function createDb({ file, legacyJsonFile = null, clock = null } = {}) {
              (SELECT COUNT(*) FROM records r WHERE r.space_id = s.id AND r.kind = 'member')  AS n_member,
              (SELECT COUNT(*) FROM records r WHERE r.space_id = s.id AND r.kind = 'day')     AS n_day,
              (SELECT COUNT(*) FROM records r WHERE r.space_id = s.id AND r.kind = 'item')    AS n_item,
-             (SELECT COUNT(*) FROM records r WHERE r.space_id = s.id AND r.kind = 'expense') AS n_expense
+             (SELECT COUNT(*) FROM records r WHERE r.space_id = s.id AND r.kind = 'expense') AS n_expense,
+             (SELECT COUNT(*) FROM records r WHERE r.space_id = s.id AND r.kind = 'poll')    AS n_poll,
+             (SELECT COUNT(*) FROM records r WHERE r.space_id = s.id AND r.kind = 'vote')    AS n_vote,
+             (SELECT COUNT(*) FROM records r WHERE r.space_id = s.id AND r.kind = 'meetup')  AS n_meetup,
+             (SELECT COUNT(*) FROM records r WHERE r.space_id = s.id AND r.kind = 'location') AS n_location
       FROM spaces s
       ORDER BY s.updated_at DESC
     `),
@@ -434,7 +438,11 @@ export function createDb({ file, legacyJsonFile = null, clock = null } = {}) {
         members: row.n_member,
         days: row.n_day,
         items: row.n_item,
-        expenses: row.n_expense
+        expenses: row.n_expense,
+        polls: row.n_poll,
+        votes: row.n_vote,
+        meetups: row.n_meetup,
+        locations: row.n_location
       }
     }
   }

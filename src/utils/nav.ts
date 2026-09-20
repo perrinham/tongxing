@@ -15,6 +15,7 @@ export const ROUTES: Record<string, string> = {
   'item-edit': '/pages/ItemEditPage',
   'trip-members': '/pages/MembersPage',
   poll: '/pages/PollPage',
+  meetup: '/pages/MeetupPage',
   map: '/pages/MapPage',
   'city-map': '/pages/CityMapPage',
   'my-guides': '/pages/MyGuidesPage',

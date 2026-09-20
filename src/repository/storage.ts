@@ -51,6 +51,8 @@ const EMPTY: PersistShape = {
   expenses: [],
   polls: [],
   votes: [],
+  meetups: [],
+  locations: [],
   activeTripId: null
 }
 
@@ -147,6 +149,8 @@ export function createStorage(backend: StorageBackend = uniBackend) {
         expenses: Array.isArray(parsed.expenses) ? parsed.expenses : [],
         polls: Array.isArray(parsed.polls) ? parsed.polls : [],
         votes: Array.isArray(parsed.votes) ? parsed.votes : [],
+        meetups: Array.isArray(parsed.meetups) ? parsed.meetups : [],
+        locations: Array.isArray(parsed.locations) ? parsed.locations : [],
         activeTripId: parsed.activeTripId ?? null
       }
     } catch {

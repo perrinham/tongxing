@@ -1224,5 +1224,82 @@ section('[13] 投票：无主空间上的创建 / 同步 / 并发投票 / 关闭
   )
 }
 
+// ───────────────────────── 集合点 / 共享位置（meetup + location 实体）─────────────────────────
+section('[14] 集合点/共享位置：设置 / 同步 / 并发位置上报 / 停止共享 / 清除')
+{
+  // 自建一个无主空间（[13] 的 T8 是块级 const 拿不到；A 在 [13] 已 logout，直接匿名建）
+  const T9 = A.createTrip({
+    title: '集合点测试',
+    destination: '成都',
+    startDate: '2027-07-01',
+    endDate: '2027-07-03',
+    budget: 0,
+    memberNames: ['我', '阿B']
+  })
+  await as('A').syncAll()
+  const code9 = String(A.sync.codes[T9.id] || '')
+  await as('B').joinByCode(code9)
+  const mI = A.membersOf(T9.id).find((m) => m.name === '我')!
+  const mB = B.membersOf(T9.id).find((m) => m.name === '阿B')!
+  ok(!!mI && !!mB, 'A/B 的自标成员都在')
+
+  // A 定集合点 → B 同步可见
+  A.setMeetup(T9.id, { title: '春熙路地铁站 A 口', address: '成都市锦江区', lat: 30.657, lng: 104.081 })
+  ok(A.meetupOf(T9.id)?.title === '春熙路地铁站 A 口', 'A 定集合点（每行程一条）')
+  await as('A').syncAll()
+  ok(A.sync.lastStatus === 'ok', '集合点推送成功', A.sync.lastStatus)
+  ok(!B.meetupOf(T9.id), 'B 本地还没有集合点')
+  await as('B').syncAll()
+  ok(B.meetupOf(T9.id)?.title === '春熙路地铁站 A 口', 'B 同步到集合点')
+
+  // B 改集合点 → A 拉取后被覆盖（字段级 LWW）
+  B.setMeetup(T9.id, { title: '天府广场', address: '成都市青羊区', lat: 30.657, lng: 104.065 })
+  await as('B').syncAll()
+  await as('A').syncAll()
+  ok(A.meetupOf(T9.id)?.title === '天府广场', 'B 的修改合并到 A（字段级 LWW）')
+  ok(A.meetupOf(T9.id)?.address === '成都市青羊区', '地址字段一并合并')
+
+  // 位置上报：isSelf 全局互斥（同一行程只能有一个「我」），所以两端按顺序各自自标。
+  // A 先（默认标在「我」）上报；B 再把 isSelf 挪到阿B 后上报 —— 两条记录并存互不覆盖。
+  A.updateLocation(T9.id, 30.66, 104.06, 35)
+  ok(A.isSharingLocation(T9.id), '上报即开启共享')
+  await as('A').syncAll()
+  await as('B').syncAll()
+  ok(B.memberLocationsOf(T9.id).length === 1, 'B 同步到 A 的位置')
+  B.setSelfMember(T9.id, mB.id)
+  B.updateLocation(T9.id, 30.68, 104.09, 20)
+  await as('B').syncAll()
+  await as('A').syncAll()
+  ok(A.memberLocationsOf(T9.id).length === 2, '两条位置记录并存（不互相覆盖）', A.memberLocationsOf(T9.id).map((l) => l.memberId))
+  ok(A.memberLocationsOf(T9.id).find((l) => l.memberId === mI.id)?.lat === 30.66, 'A 的位置保持')
+  ok(A.memberLocationsOf(T9.id).find((l) => l.memberId === mB.id)?.lat === 30.68, 'B 的位置没被 A 覆盖')
+
+  // 连续上报：同一条记录刷新坐标（id = loc_<memberId>，更新即覆盖）
+  B.updateLocation(T9.id, 30.69, 104.1, 12)
+  await as('B').syncAll()
+  await as('A').syncAll()
+  ok(A.memberLocationsOf(T9.id).length === 2, '刷新后仍是两条记录')
+  ok(A.memberLocationsOf(T9.id).find((l) => l.memberId === mB.id)?.lat === 30.69, 'A 看到 B 的最新坐标')
+
+  // B 停止共享 → 墓碑 → A 端消失；A 的位置不受影响
+  B.stopSharing(T9.id)
+  ok(!B.isSharingLocation(T9.id), '本地立即停止共享')
+  await as('B').syncAll()
+  await as('A').syncAll()
+  ok(!A.memberLocationsOf(T9.id).some((l) => l.memberId === mB.id), 'A 端 B 的位置消失（墓碑同步）')
+  ok(A.memberLocationsOf(T9.id).some((l) => l.memberId === mI.id), 'A 的位置不受影响')
+
+  // 清除集合点 → 墓碑 → 对端消失（removeMeetup 只按行程找，不依赖 isSelf）
+  A.removeMeetup(T9.id)
+  ok(!A.meetupOf(T9.id), '本地集合点已清')
+  await as('A').syncAll()
+  await as('B').syncAll()
+  ok(!B.meetupOf(T9.id), 'B 端集合点消失（墓碑同步）')
+
+  // resetAll 清空本地两类记录
+  B.resetAll()
+  ok(B.meetups.length === 0 && B.locations.length === 0, 'resetAll 后本地集合点/位置清空')
+}
+
 console.log(`\n===== 客户端同步结果：${H.pass} 通过 / ${H.fail} 失败 =====\n`)
 process.exit(H.fail ? 1 : 0)
