@@ -170,6 +170,22 @@ export const ITEM_TYPE_META: Record<ItemType, { label: string; color: string; bg
 
 export const ITEM_TYPE_ORDER: ItemType[] = ['spot', 'food', 'transport', 'stay', 'other']
 
+/**
+ * 数据驱动的 META 取用一律走这两个助手，不要直接 `META[x]`。
+ *
+ * 同步进来的记录可能带着「未来客户端才有的枚举值」（别人用新版本推了新分类，
+ * 旧客户端的 META 表里没有这个键）—— 直接取会 undefined 解引用，页面白屏。
+ * 认不出的枚举一律回退 other（文案「其他」+ 中性色，语义上也不算错得离谱）。
+ * 选择器里用 `META[key]` 循环自身键集的写法（ExpenseEditPage / ItemEditPage）是安全的，不用换。
+ */
+export function itemMetaOf(type: string): { label: string; color: string; bg: string } {
+  return ITEM_TYPE_META[type as ItemType] || ITEM_TYPE_META.other
+}
+
+export function categoryMetaOf(cat: string): { label: string; color: string; bg: string; icon: string } {
+  return CATEGORY_META[cat as ExpenseCategory] || CATEGORY_META.other
+}
+
 /** 头像色块 —— **身份色**，与语义色 / 分类色是两套东西，按成员序号取模轮换。
  *
  *  ⚠️ 改这个数组 = 改所有人的头像颜色（颜色由序号决定，不是数据）。

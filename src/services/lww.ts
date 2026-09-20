@@ -152,9 +152,18 @@ export function mergeRecord<T extends RecordStampable>(
 
     // 严格更晚才赢；相等保留 base —— 见文件头的「平局口径」。
     if (a && (!b || hlcAfter(a, b))) {
-      if (incoming && Object.prototype.hasOwnProperty.call(incoming, k)) out[k] = inc[k]
-      stamp[k] = incH[k]
-      if (b) took += 1
+      // 值和戳必须同进退：incoming 时间赢、但记录体里没带这个键时，值只能留
+      // base 的旧值，戳也必须一起留 —— 若只顶戳，会「新戳守着旧值」，
+      // 后续对这一格的编辑按戳判负而被悄悄吞掉（戳值脱钩）。与服务端孪生一致。
+      const hasBodyKey = !!incoming && Object.prototype.hasOwnProperty.call(incoming, k)
+      if (hasBodyKey) {
+        out[k] = inc[k]
+        stamp[k] = incH[k]
+        if (b) took += 1
+      } else {
+        stamp[k] = baseH?.[k] ?? incH[k]
+        if (a) kept += 1
+      }
     } else {
       stamp[k] = baseH![k]
       if (a) kept += 1

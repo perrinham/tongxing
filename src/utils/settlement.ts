@@ -171,8 +171,8 @@ export function settle(members: Member[], expenses: Expense[]): SettlementResult
   const total = toYuan(totalCent)
   const balances = computeBalances(members, expenses)
 
-  // 人均 = 按人次的平均，而非简单除以人数（没参与的人不该被算进去）
-  const personCount = members.length || 1
+  // 人均 = 参与过任一笔账单的成员均值（没参与的人不该被算进去稀释人均）
+  const personCount = balances.filter((b) => b.paid > 0 || b.shouldPay > 0).length || 1
   const perCapita = total / personCount
 
   const catMap = new Map<ExpenseCategory, number>()

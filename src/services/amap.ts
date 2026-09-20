@@ -49,7 +49,18 @@ function req<T>(path: string, params: Record<string, string>): Promise<T> {
   })
 }
 
-/** 关键字的 POI 检索（返回多个候选） */
+/**
+ * 解析高德 "lng,lat"。缺失 / NaN / 0,0 占位一律返回 null ——
+ * 没有这层守卫，无坐标 POI（公交线路等）会静默变成 0,0 或 NaN 打进地图。
+ */
+function parseLngLat(loc: string | undefined): { lng: number; lat: number } | null {
+  if (!loc) return null
+  const [lng, lat] = loc.split(',').map(Number)
+  if (!Number.isFinite(lng) || !Number.isFinite(lat) || (lng === 0 && lat === 0)) return null
+  return { lng, lat }
+}
+
+/** POI 搜索（关键词 + 可选城市） */
 export async function searchPoi(keyword: string, city?: string): Promise<AmapPoi[]> {
   return searchPoiWithTypes(keyword, city)
 }
@@ -73,20 +84,23 @@ export async function searchPoiWithTypes(
   if (city) params.city = city
   try {
     const data = await req<{ pois: any[] }>('/v3/place/text', params)
-    return (data.pois || []).map((p) => {
-      const [lng, lat] = (p.location || '').split(',').map(Number)
-      const biz = p.biz_ext && typeof p.biz_ext === 'object' ? p.biz_ext : {}
-      const rating = Number(biz.rating)
-      return {
-        id: p.id || p.name,
-        name: p.name,
-        address: p.address || [p.pname, p.cityname, p.adname].filter(Boolean).join(''),
-        lng,
-        lat,
-        city: p.cityname,
-        rating: Number.isFinite(rating) && rating > 0 ? rating : undefined
-      } as AmapPoi
-    })
+    return (data.pois || [])
+      .map((p) => {
+        const pos = parseLngLat(p.location)
+        if (!pos) return null
+        const biz = p.biz_ext && typeof p.biz_ext === 'object' ? p.biz_ext : {}
+        const rating = Number(biz.rating)
+        return {
+          id: p.id || p.name,
+          name: p.name,
+          address: p.address || [p.pname, p.cityname, p.adname].filter(Boolean).join(''),
+          lng: pos.lng,
+          lat: pos.lat,
+          city: p.cityname,
+          rating: Number.isFinite(rating) && rating > 0 ? rating : undefined
+        } as AmapPoi
+      })
+      .filter(Boolean) as AmapPoi[]
   } catch {
     return []
   }
@@ -102,9 +116,11 @@ export async function inputTips(keyword: string, city?: string): Promise<AmapPoi
     return (data.tips || [])
       .filter((t) => t.location && t.location !== '[]')
       .map((t) => {
-        const [lng, lat] = (t.location || '').split(',').map(Number)
-        return { id: t.id || t.name, name: t.name, address: t.district || '', lng, lat, city: t.district }
+        const pos = parseLngLat(t.location)
+        if (!pos) return null
+        return { id: t.id || t.name, name: t.name, address: t.district || '', lng: pos.lng, lat: pos.lat, city: t.district }
       })
+      .filter(Boolean) as AmapPoi[]
   } catch {
     return []
   }
@@ -118,8 +134,8 @@ export async function geocode(address: string, city?: string): Promise<LatLng | 
   try {
     const data = await req<{ geocodes: any[] }>('/v3/geocode/geo', params)
     if (!data.geocodes || !data.geocodes.length) return null
-    const [lng, lat] = (data.geocodes[0].location || '').split(',').map(Number)
-    return { latitude: lat, longitude: lng }
+    const pos = parseLngLat(data.geocodes[0].location)
+    return pos ? { latitude: pos.lat, longitude: pos.lng } : null
   } catch {
     return null
   }

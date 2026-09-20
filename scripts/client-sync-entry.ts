@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createPinia } from 'pinia'
 import { useTripStore } from '../src/stores/trip'
-import { storage } from '../src/repository/storage'
+import { bindStorage, createStorage, storage } from '../src/repository/storage'
 import type { SyncMeta } from '../src/types'
 import { encodeHlc, cmpHlc, recordHlc, createHlc } from '../src/services/hlc'
 import { MERGE_META_KEYS, mergeRecord } from '../src/services/lww'
@@ -34,11 +34,16 @@ const C = useTripStore(createPinia())
 /**
  * 把某个 store 实例的读写绑定到它自己的「设备存储」。
  *
- * 否则自动同步的去抖定时器可能在切换到别的设备之后才触发，
- * 把 A 的状态写进 B 的存储 —— 这是测试脚手架的坑，不是产品代码的问题。
+ * 两层隔离：
+ *   1. bindStorage —— 结构性隔离：该实例的 storage 读写固定落在这台设备的
+ *      sheet 上（创建时定终身）。这是主防线：store 内部的去抖定时器 /
+ *      异步链晚点触发时，不再依赖调用时刻的 state.device，写不串。
+ *   2. 方法包装 —— 兜底：load/persist/persistSync 期间的设备上下文也钉住
+ *      （uni 侧还有 storage 之外的设备相关路径，如 uni.login 的 code）。
  */
 type AnyStore = typeof A
 function bind(store: AnyStore, dev: Device) {
+  bindStorage(store, createStorage(mock.deviceBackend(dev)))
   const methods = ['load', 'persist', 'persistSync'] as const
   for (const m of methods) {
     const orig = (store[m] as (...args: unknown[]) => unknown).bind(store)

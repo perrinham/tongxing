@@ -137,6 +137,15 @@ export function createRealtime(deps: RealtimeDeps): RealtimeController {
   let connId = ''
   let lastError = ''
   let attempt = 0
+  /**
+   * 连接代数：每次 connect() 递增。
+   *
+   * restart / stop 会强拆旧连接，但旧 socket 的 onClose / onError 可能**晚到**
+   * （事件循环里排队中的那一批）。回调闭包各自捕获自己的代数，处理事件前先比对：
+   * 不校验的话，旧连接的 onDown 会把新连接的 task 引用清掉、再排一次重连 ——
+   * 表现为双开连接，两条连接都收同一批推送，界面「每次改动闪两下」。
+   */
+  let generation = 0
   let stopped = true
   let helloDone = false
   let lastFrameAt = 0
@@ -371,10 +380,14 @@ export function createRealtime(deps: RealtimeDeps): RealtimeController {
       return
     }
 
+    // 本轮连接的代数（见 generation 的说明）。必须在注册回调**之前**确定，
+    // 让下面四个闭包都捕获同一个值。
+    const gen = ++generation
     task = next
     let opened = false
 
     next.onOpen(() => {
+      if (gen !== generation) return // 旧连接的迟到事件：这一代已被 restart/stop 作废
       opened = true
       sendMsg({
         t: 'hello',
@@ -391,8 +404,12 @@ export function createRealtime(deps: RealtimeDeps): RealtimeController {
         onDown('hello-timeout')
       }, timing.helloTimeoutMs)
     })
-    next.onMessage((res) => handleMessage(res?.data))
+    next.onMessage((res) => {
+      if (gen !== generation) return
+      handleMessage(res?.data)
+    })
     next.onError((err) => {
+      if (gen !== generation) return
       if (stopped) return
       lastError = err?.errMsg || 'socket error'
       // 连都没连上就直接失败：手动推进状态机，不等 onClose
@@ -402,6 +419,7 @@ export function createRealtime(deps: RealtimeDeps): RealtimeController {
       }
     })
     next.onClose((res) => {
+      if (gen !== generation) return
       if (stopped) {
         setStatus('stopped')
         return
@@ -424,9 +442,15 @@ export function createRealtime(deps: RealtimeDeps): RealtimeController {
       return lastError
     },
     start() {
-      // 幂等：已经在连 / 已连上 / 已经排好了重连，就都不要再插一脚 ——
+      // 幂等：已经在连 / 已连上，就都不要再插一脚 ——
       // 重复 connect 会双开连接，两个连接都会收到同一批推送，界面表现为「每次改动闪两下」。
-      if (!stopped && (status === 'online' || status === 'connecting' || retryTimer)) return
+      if (!stopped && (status === 'online' || status === 'connecting')) return
+      // 有排定中的重试也立即重连：start 的语义是「现在就要通」（回前台 resume 靠它），
+      // 不该等退避计时走完。清掉计时器再连，不会双开 —— 计时器是当时唯一挂起中的动作。
+      if (retryTimer) {
+        clearTimeout(retryTimer)
+        retryTimer = null
+      }
       stopped = false
       attempt = 0
       authFailed = false
@@ -473,11 +497,16 @@ export function createRealtime(deps: RealtimeDeps): RealtimeController {
         }
       }
       if (!changed) return
+      // 移除的差集要**显式退订**：只发 sub 不发 unsub 的话，服务端订阅只增不减，
+      // 已 drop 的空间一直占着权限通道，后续 update 元通知还会继续推过来。
+      // hello 之前不用发 —— 连上后 flushSubscriptions 全量对齐，服务端没订过的无所谓。
+      const removed = [...wanted].filter((id) => !next.has(id))
       // 之前被拒绝过的空间，重新出现在集合里时给它一次机会：
       // 场景是「我凭分享码加进去了，现在应该有权限了」。
       for (const id of next) if (!wanted.has(id)) blocked.delete(id)
       wanted.clear()
       for (const id of next) wanted.add(id)
+      if (removed.length && helloDone) sendMsg({ t: 'unsub', ids: removed })
       flushSubscriptions()
     },
     spaces() {

@@ -14,6 +14,7 @@
 import { mock, TEST_BASE } from './uni-mock'
 import { createPinia } from 'pinia'
 import { useCityStore } from '../src/stores/city'
+import { bindStorage, createStorage } from '../src/repository/storage'
 import { createHarness } from './lib/test-harness.mjs'
 
 type Device = 'A' | 'B'
@@ -30,9 +31,13 @@ const B = useCityStore(piniaB)
 /**
  * store 里读写 uni storage 的方法要绑到「当前设备」的本地存储，
  * 否则自动同步的去抖定时器可能在切设备后触发，把 A 的状态写进 B 的存储。
+ *
+ * bindStorage 是结构性隔离（实例的 storage 读写创建时定终身）；方法包装
+ * 继续兜住 storage 之外的设备相关路径（护照 / 昵称走 uni 直连键）。
  */
 type AnyStore = typeof A
 function bind(store: AnyStore, dev: Device) {
+  bindStorage(store, createStorage(mock.deviceBackend(dev)))
   const methods = ['load', 'persist'] as const
   for (const m of methods) {
     const orig = (store[m] as (...args: unknown[]) => unknown).bind(store)

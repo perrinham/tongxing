@@ -5,7 +5,7 @@ import { CITY_GEO, resolveCityName, type CityGeo } from '@/data/citiesGeo'
 import { geocode } from '@/services/amap'
 import { createBackend, type BackendClient } from '@/services/backend'
 import { identityValid } from '@/services/identity'
-import { storage } from '@/repository/storage'
+import { storageFor } from '@/repository/storage'
 import { AMAP_ENABLED, BACKEND_ENABLED } from '@/config'
 
 const NICK_KEY = 'travel_nick_v1'
@@ -86,8 +86,8 @@ function writeNick(n: string): void {
  */
 const backends = new WeakMap<object, BackendClient>()
 
-function sessionTokenOf(): string {
-  const id = storage.readSync().identity
+function sessionTokenOf(store: object): string {
+  const id = storageFor(store).readSync().identity
   return id && identityValid(id) ? String(id.token || '') : ''
 }
 
@@ -98,8 +98,8 @@ function sessionTokenOf(): string {
 const publishInflight = new WeakMap<object, Map<string, Promise<void>>>()
 
 /** 当前登录身份的 openid（未登录为空串） */
-function openidOf(): string {
-  const id = storage.readSync().identity
+function openidOf(store: object): string {
+  const id = storageFor(store).readSync().identity
   return id && identityValid(id) ? String(id.openid || '') : ''
 }
 
@@ -162,7 +162,7 @@ export const useCityStore = defineStore('city', {
      *   · 最后回拉自己的云端足迹并进来（失败静默，不影响本地）。
      */
     async onIdentityChanged(): Promise<void> {
-      const openid = openidOf()
+      const openid = openidOf(this)
       if (!openid) return
       let changed = false
       const kept: CityPassport[] = []
@@ -186,7 +186,7 @@ export const useCityStore = defineStore('city', {
     api(): BackendClient {
       let b = backends.get(this)
       if (!b) {
-        b = createBackend({ token: sessionTokenOf })
+        b = createBackend({ token: () => sessionTokenOf(this) })
         backends.set(this, b)
       }
       return b
@@ -207,7 +207,7 @@ export const useCityStore = defineStore('city', {
      */
     authorNameOf(): string {
       if (this.nickname && this.nickname !== '我') return this.nickname
-      const openid = openidOf()
+      const openid = openidOf(this)
       return openid ? `旅人${openid.slice(-4)}` : '我'
     },
 
@@ -237,10 +237,14 @@ export const useCityStore = defineStore('city', {
       const running = inflight.get(key)
       if (running) return running
       const task = (async () => {
+        let publishedAt = -1
         try {
           // 先让出一个微任务再读字段：markCity 后常紧跟 saveGuide（同步连续调用），
           // 去重会合并成一次发布 —— 等这个 tick 的改动都落完，发布的才是最终状态。
           await Promise.resolve()
+          // 快照本次发布对应的版本：网络往返期间若又有编辑（updatedAt 变了），
+          // finally 里比对出来补发一次 —— 否则去重窗口会把在途改动吞掉
+          publishedAt = p.updatedAt
           await this.api().upsertGuide(p.name, {
             author: this.authorNameOf(),
             status: p.status,
@@ -255,6 +259,8 @@ export const useCityStore = defineStore('city', {
           console.warn('[city] 发布到后端失败，仅保存在本地', e)
         } finally {
           inflight!.delete(key)
+          // 补发走的是防抖式的再入队（新一轮任务会再快照、再比对），不递归复杂化
+          if (p.updatedAt !== publishedAt) void this.publishMyGuide(name)
         }
       })()
       inflight.set(key, task)
@@ -292,7 +298,7 @@ export const useCityStore = defineStore('city', {
     /** 标记一个城市为去过 / 想去（已存在则切换状态） */
     markCity(name: string, status: CityStatus): CityPassport {
       const nm = name.trim()
-      const openid = openidOf()
+      const openid = openidOf(this)
       let p = this.passports.find((x) => x.name === nm)
       if (!p) {
         const c = this.coordsOf(nm)
@@ -317,18 +323,18 @@ export const useCityStore = defineStore('city', {
       // 自动发布（已登录才发）：足迹改动即时同步到服务端。
       // 匿名用户保持纯本地 —— 服务端的 (城市, 作者) 唯一键没有 openid 兜底时
       // 全靠昵称区分，匿名自动发布会让「我」们互相踩踏。
-      if (sessionTokenOf()) void this.publishMyGuide(nm)
+      if (sessionTokenOf(this)) void this.publishMyGuide(nm)
       return p
     },
 
     setStatus(name: string, status: CityStatus) {
       const p = this.passports.find((x) => x.name === name.trim())
       if (!p) return
-      claimLocal(p, openidOf())
+      claimLocal(p, openidOf(this))
       p.status = status
       p.updatedAt = Date.now()
       this.persist()
-      if (sessionTokenOf()) void this.publishMyGuide(name)
+      if (sessionTokenOf(this)) void this.publishMyGuide(name)
     },
 
     /** 保存攻略 / 评价 / 评分 / 到访日期 / 想去理由 */
@@ -344,7 +350,7 @@ export const useCityStore = defineStore('city', {
     ) {
       const p = this.passports.find((x) => x.name === name.trim())
       if (!p) return
-      claimLocal(p, openidOf())
+      claimLocal(p, openidOf(this))
       if (payload.guide !== undefined) p.guide = payload.guide
       if (payload.review !== undefined) p.review = payload.review
       if (payload.rating !== undefined) p.rating = payload.rating
@@ -352,7 +358,7 @@ export const useCityStore = defineStore('city', {
       if (payload.wishNote !== undefined) p.wishNote = payload.wishNote
       p.updatedAt = Date.now()
       this.persist()
-      if (sessionTokenOf()) void this.publishMyGuide(name)
+      if (sessionTokenOf(this)) void this.publishMyGuide(name)
     },
 
     /**
@@ -368,8 +374,8 @@ export const useCityStore = defineStore('city', {
      */
     async syncMine(): Promise<number> {
       if (!BACKEND_ENABLED) return 0
-      if (!sessionTokenOf()) return 0
-      const openid = openidOf()
+      if (!sessionTokenOf(this)) return 0
+      const openid = openidOf(this)
       let guides: Awaited<ReturnType<BackendClient['getMyGuides']>>['guides']
       try {
         const r = await this.api().getMyGuides()
@@ -421,6 +427,13 @@ export const useCityStore = defineStore('city', {
         }
       }
       if (merged) this.persist()
+      // 云端回拉的城市可能不在本地坐标表里（lat/lng=0,0）：CityMapPage 的 markers
+      // 会把 0,0 过滤掉，城市在地图上直接消失。对新增/缺坐标条目逐个异步补全
+      // （与 markCity 同款模式）；ensureCoords 内部会自行 persist。
+      for (const [name] of latest) {
+        const p = this.passports.find((x) => x.name === name && x.owner === openid)
+        if (p && (!p.lat || !p.lng)) void this.ensureCoords(p)
+      }
       return merged
     },
 
@@ -436,7 +449,7 @@ export const useCityStore = defineStore('city', {
      */
     async fetchMyCloud(): Promise<CityGuide[]> {
       if (!BACKEND_ENABLED) throw new Error('未启用云同步')
-      if (!sessionTokenOf()) throw new Error('尚未登录')
+      if (!sessionTokenOf(this)) throw new Error('尚未登录')
       const r = await this.api().getMyGuides()
       return r.guides || []
     },

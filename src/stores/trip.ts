@@ -13,7 +13,7 @@ import type {
   TripDoc,
   TripSpaceFull
 } from '@/types'
-import { storage, emptySyncMeta } from '@/repository/storage'
+import { storageFor, emptySyncMeta } from '@/repository/storage'
 import { uid } from '@/utils/id'
 import { useCityStore } from '@/stores/city'
 import { addDays, daysBetween, todayISO, avatarColor } from '@/utils/format'
@@ -31,6 +31,7 @@ import {
   type RealtimeUpdate
 } from '@/services/realtime'
 import {
+  capHlc,
   createHlc,
   hlcAfter,
   recordHlc,
@@ -282,7 +283,7 @@ export const useTripStore = defineStore('trip', {
 
   actions: {
     load() {
-      const s = storage.read()
+      const s = storageFor(this).read()
       this.trips = s.trips
       this.members = s.members
       this.days = s.days
@@ -292,7 +293,7 @@ export const useTripStore = defineStore('trip', {
       if (!this.activeTripId && this.trips.length) {
         this.activeTripId = this.tripsSorted[0].id
       }
-      this.sync = storage.readSync()
+      this.sync = storageFor(this).readSync()
       // 同步元数据是刚读出来的，旧实例里的 HLC 状态作废，下次取用时重建
       hlcClocks.delete(this)
       // 令牌不需要在这里「推给网络层」：backend 实例的 token 回调每次请求现取
@@ -311,7 +312,7 @@ export const useTripStore = defineStore('trip', {
      * @param opts.sync 传 false 表示这次变更不参与云端同步（清空数据、导入时用）
      */
     persist(opts: { sync?: boolean } = {}) {
-      storage.write({
+      storageFor(this).write({
         version: 1,
         trips: this.trips,
         members: this.members,
@@ -320,7 +321,7 @@ export const useTripStore = defineStore('trip', {
         expenses: this.expenses,
         activeTripId: this.activeTripId
       })
-      storage.touch()
+      storageFor(this).touch()
       if (opts.sync !== false) this.scheduleSync()
     },
 
@@ -328,7 +329,7 @@ export const useTripStore = defineStore('trip', {
 
     persistSync() {
       this.sync.tombstones = this.sync.tombstones.slice(-MAX_LOCAL_TOMBSTONES)
-      storage.writeSync(this.sync)
+      storageFor(this).writeSync(this.sync)
     },
 
     /**
@@ -424,7 +425,16 @@ export const useTripStore = defineStore('trip', {
 
     /** 标记某个行程「本机有未推送的改动」 */
     markLocalChange(tripId: string) {
-      this.sync.localAtOf[tripId] = Date.now()
+      // 只许前进：时钟回拨（NTP 纠偏）后若 localAtOf < syncedAtOf，行程会被
+      // 判净、编辑静默不推 —— 脏标记取 max 抵御回拨；再保底压过上次推送戳
+      // 一毫秒，堵住「推送成功后时钟才回拨」的残余窗口
+      // （local == synced 会被判净，这次编辑就滞留本地永远推不出去了）
+      const prev = this.sync.localAtOf[tripId] || 0
+      this.sync.localAtOf[tripId] = Math.max(
+        prev,
+        Date.now(),
+        (this.sync.syncedAtOf[tripId] || 0) + 1
+      )
     },
 
     /**
@@ -443,6 +453,10 @@ export const useTripStore = defineStore('trip', {
       this.ensureFieldStamps(tripId)
       this.markLocalChange(tripId)
       this.persist()
+      // 同步元数据（localAtOf / hlc / 墓碑）必须与业务数据同批落盘：
+      // 只写业务数据的话，去抖窗口内进程被杀会丢「有未推送改动」的标记，
+      // 该行程从此判净、编辑永不推送；hlc 断档还会让新戳落后于已推送的戳。
+      this.persistSync()
     },
 
     /**
@@ -634,6 +648,7 @@ export const useTripStore = defineStore('trip', {
       delete this.sync.revOf[id]
       delete this.sync.syncedAtOf[id]
       delete this.sync.localAtOf[id]
+      delete this.sync.codes[id]
     },
 
     removeTrip(id: string) {
@@ -674,6 +689,22 @@ export const useTripStore = defineStore('trip', {
       this.commit(m.tripId)
     },
 
+    /**
+     * 批量把「我」标记到某个成员上（其余成员的 isSelf 一并清掉）。
+     *
+     * 与逐个 updateMember 的区别：一次 commit / 一次持久化 —— 成员页每切一次
+     * 「标记为我」就是 N 次 assign + N 次字段戳 + N 次全量写盘的写放大，
+     * 收口成一个 action 后只在末尾落一次盘。
+     */
+    setSelfMember(tripId: string, memberId: string) {
+      const targets = this.members.filter((m) => m.tripId === tripId)
+      const touched = targets.filter((m) => (m.id === memberId) !== !!m.isSelf)
+      if (!touched.length) return
+      for (const m of touched) m.isSelf = m.id === memberId
+      this.stampFields(touched, ['isSelf'])
+      this.commit(tripId)
+    },
+
     removeMember(id: string) {
       const m = this.members.find((x) => x.id === id)
       if (!m) return
@@ -694,7 +725,16 @@ export const useTripStore = defineStore('trip', {
           if (other) next = { ...next, payerId: other.id }
         }
         const parts = next.participants.filter((p) => p.memberId !== id)
-        const merged = { ...next, participants: parts.length ? parts : next.participants }
+        const merged = {
+          ...next,
+          participants: parts.length
+            ? parts
+            : // 唯一参与人刚被删：回退为剩余成员均摊 —— 留下含已删 id 的
+              // 参与人会在结算时被静默丢弃，净额不守恒、转账算错
+              this.members
+                .filter((m) => m.tripId === tripId)
+                .map((m) => ({ memberId: m.id, share: 1 }))
+        }
         touched.push(merged)
         return merged
       })
@@ -997,7 +1037,7 @@ export const useTripStore = defineStore('trip', {
     resetAll() {
       // 清空本地 ≠ 删除云端：这里只是把本机数据抹掉，
       // 所以 persist 时不触发同步（否则会把空快照推上去）。
-      storage.clear()
+      storageFor(this).clear()
       this.trips = []
       this.members = []
       this.days = []
@@ -1005,16 +1045,12 @@ export const useTripStore = defineStore('trip', {
       this.expenses = []
       this.activeTripId = null
       this.sync = {
+        ...emptySyncMeta(),
         deviceId: this.sync.deviceId,
         author: this.sync.author,
-        lastSyncAt: 0,
-        lastStatus: 'idle',
-        lastError: '',
-        revOf: {},
-        localAtOf: {},
-        syncedAtOf: {},
-        codes: {},
-        tombstones: []
+        // hlc 必须保留：重置后到下次全量拉取前的编辑仍靠 HLC 定序，
+        // 从零起步会拿到更小的戳，推上去被判旧丢弃
+        hlc: this.sync.hlc
       }
       this.persistSync()
       this.persist({ sync: false })
@@ -1262,7 +1298,11 @@ export const useTripStore = defineStore('trip', {
       this.ensureDeviceId()
       const rt = realtimes.get(this)
       if (rt) {
-        if (rt.status !== 'online') rt.restart()
+        // 必须走 start() 而不是 restart()：onHide 已把通道 stop() 掉（stopped=true），
+        // restart 的 wasRunning=!stopped 判断恒为 false，只会落到 idle 直接返回、
+        // 不发起连接 —— 一次后台/前台循环后实时通道就永久失活了。
+        // start() 是幂等的「现在就要通」：已在线/连接中不动，停过就重连，有退避计时则立即连。
+        if (rt.status !== 'online') rt.start()
       } else {
         this.realtimeController().start()
       }
@@ -1342,10 +1382,21 @@ export const useTripStore = defineStore('trip', {
      */
     async pullSpace(tripId: string): Promise<boolean> {
       if (!SYNC_ENABLED) return false
+      // 空间已不在本地集合（登出剪除 / dropLocalCopy / 本地已删）就只退订、不拉取：
+      // applyServerDoc 会把服务端快照原样合并进来，已删除的本地副本会被它复活。
+      // 两个检查点：发起前拦掉明确的死活计，网络往返期间被 drop 的靠第二个挡。
+      if (!this.trips.some((t) => t.id === tripId)) {
+        this.syncRealtimeSpaces()
+        return false
+      }
       try {
         const r = await this.api().getSpace(tripId)
         const s = r.space
         if (!s?.doc) return false
+        if (!this.trips.some((t) => t.id === tripId)) {
+          this.syncRealtimeSpaces()
+          return false
+        }
         this.applyServerDoc(s.id, s.doc, !!s.deleted, s.tombstones || [])
         this.sync.revOf[s.id] = s.rev
         if (s.code) this.sync.codes[s.id] = s.code
@@ -1477,7 +1528,9 @@ export const useTripStore = defineStore('trip', {
           // 这里必须逐字段，不能整条二选一：保留整条本地会丢掉服务端刚改的字段，
           // 取整条服务端则会丢掉本地**还没推上去**的字段改动 —— 后者是真正的数据丢失，
           // 因为那份改动再也不会出现在下一次推送里。
-          out.set(r.id, l ? mergeRecord<T>(r, l).rec : r)
+          // cap 与服务端合并口径一致（双方都先封顶再比较）：不封顶的话，
+          // 时钟快 >60s 的设备会在字段比较里永远赢，两端各自保留己方值、静默分叉。
+          out.set(r.id, l ? mergeRecord<T>(r, l, (h) => capHlc(h, Date.now(), CLOCK_MAX_SKEW_MS)).rec : r)
         }
 
         // 本地独有的记录：远端还没有（本地新增、尚未推送），必须留下
@@ -1489,7 +1542,9 @@ export const useTripStore = defineStore('trip', {
         return [...out.values()]
       }
 
-      const keepTrip = localTrip ? mergeRecord<Trip>(doc.trip, localTrip).rec : doc.trip
+      const keepTrip = localTrip
+        ? mergeRecord<Trip>(doc.trip, localTrip, (h) => capHlc(h, Date.now(), CLOCK_MAX_SKEW_MS)).rec
+        : doc.trip
 
       this.trips = [...this.trips, keepTrip]
       this.members = [...this.members, ...mergeList('member', localMembers, doc.members ?? [])]
@@ -1638,17 +1693,6 @@ export const useTripStore = defineStore('trip', {
       if (cached) return cached
       const res = await this.pushTrip(tripId)
       return res.space.code
-    },
-
-    /** 删除云端空间（本机删除走 removeTrip，它会记墓碑并同步） */
-    async removeRemote(tripId: string) {
-      const rt = realtimes.get(this)
-      await this.api().deleteSpace(tripId, rt?.connId || '')
-      delete this.sync.revOf[tripId]
-      delete this.sync.syncedAtOf[tripId]
-      delete this.sync.codes[tripId]
-      this.sync.tombstones = this.sync.tombstones.filter((t) => t.tripId !== tripId)
-      this.persistSync()
     },
 
     /** 探活：给「云同步」页展示后端是否可达 */

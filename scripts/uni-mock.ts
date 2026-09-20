@@ -66,6 +66,22 @@ export const mock = {
   /** 直接读某台设备的本地存储（断言「数据真的落到本地了」用） */
   read(dev: string, key: string): string {
     return sheetOf(dev).get(key) || ''
+  },
+  /**
+   * 返回固定到某台设备 sheet 的存储后端（uni 三件套同形）。
+   * 给 storage.createStorage() 注入用：store 实例的读写从此「创建时定终身」，
+   * 不再依赖调用时刻的 state.device —— 去抖定时器 / 异步链晚点触发也写不串。
+   */
+  deviceBackend(dev: string) {
+    return {
+      getStorageSync: (key: string) => sheetOf(dev).get(key) ?? '',
+      setStorageSync: (key: string, value: string) => {
+        sheetOf(dev).set(key, String(value))
+      },
+      removeStorageSync: (key: string) => {
+        sheetOf(dev).delete(key)
+      }
+    }
   }
 }
 
