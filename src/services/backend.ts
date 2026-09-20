@@ -19,7 +19,8 @@ import type {
   TripDoc,
   TripSpaceBrief,
   TripSpaceFull,
-  Tombstone
+  Tombstone,
+  WeatherReply
 } from '@/types'
 
 export interface CityGuidePayload {
@@ -162,6 +163,7 @@ export interface BackendClient {
   deleteGuide(id: string): Promise<{ ok: boolean }>
   listSpaces(withDoc?: boolean): Promise<{ spaces: (TripSpaceBrief | TripSpaceFull)[] }>
   listDiscoverTrips(): Promise<{ trips: DiscoverTrip[] }>
+  getWeather(place: string, start: string, end: string): Promise<WeatherReply>
   getSpace(id: string): Promise<{ space: TripSpaceFull }>
   getSpaceByCode(code: string): Promise<{ space: TripSpaceFull }>
   joinSpace(code: string): Promise<{ space: TripSpaceFull; joined: boolean }>
@@ -270,6 +272,14 @@ export function createBackend(opts: BackendOptions = {}): BackendClient {
      */
     listDiscoverTrips(): Promise<{ trips: DiscoverTrip[] }> {
       return req('GET', '/api/trips/discover', undefined, { token, retry: 1 })
+    },
+
+    /** 逐日天气（服务端代理 Open-Meteo）。GET 幂等，失败由调用方静默降级 */
+    getWeather(place: string, start: string, end: string): Promise<WeatherReply> {
+      const q =
+        `place=${encodeURIComponent(place)}` +
+        `&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`
+      return req('GET', `/api/weather?${q}`, undefined, { token, retry: 1 })
     },
 
     getSpace(id: string): Promise<{ space: TripSpaceFull }> {

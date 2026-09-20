@@ -2325,6 +2325,34 @@ try {
       ok((await req(main.base, 'GET', '/api/ws')).status === 404, '实时端点是 upgrade-only，普通 GET 不被它接管', '')
     }
   }
+
+  // ── [19] 天气代理：mock 数据源，全程不依赖外网 ──
+  section('[19] 天气代理（TX_WEATHER_MOCK=1）')
+  {
+    const wxs = await ensure('天气', 8798, { TX_WEATHER_MOCK: '1', RATE_LIMIT: '5000' })
+    extraChildren.push(wxs.child)
+    const W = (m, p) => req(wxs.base, m, p)
+
+    const ok1 = await W('GET', '/api/weather?place=%E6%88%90%E9%83%BD&start=2026-09-20&end=2026-09-24')
+    ok(ok1.status === 200 && ok1.data.source === 'mock', 'GET 正常返回 200 + mock 来源', ok1.status)
+    ok(Array.isArray(ok1.data.days) && ok1.data.days.length === 5, '5 天范围返回 5 条逐日', ok1.data.days?.length)
+    ok(ok1.data.days?.[0]?.date === '2026-09-20' && ok1.data.days?.[4]?.date === '2026-09-24', '日期与请求范围逐日对齐')
+    ok(ok1.data.days?.[1]?.code === 63, 'mock 序列必现雨天码（带伞链路可断言）', ok1.data.days?.[1])
+    ok(ok1.data.resolved?.lat === 30.65 && ok1.data.resolved?.lng === 104.06, 'resolved 带坐标')
+    ok(typeof ok1.data.days?.[0]?.tmax === 'number' && typeof ok1.data.days?.[0]?.tmin === 'number', '温度字段齐全')
+
+    const cached = await W('GET', '/api/weather?place=%E6%88%90%E9%83%BD&start=2026-09-20&end=2026-09-24')
+    ok(cached.status === 200 && JSON.stringify(cached.data) === JSON.stringify(ok1.data), '同参数二次请求命中内存缓存（结果逐字节一致）')
+
+    const trunc = await W('GET', '/api/weather?place=%E6%88%90%E9%83%BD&start=2026-09-20&end=2026-10-10')
+    ok(trunc.status === 200 && trunc.data.days.length === 16 && trunc.data.truncated === true, '21 天请求被截到 16 天并标 truncated', trunc.data.days?.length)
+    ok(trunc.data.days?.[15]?.date === '2026-10-05', '截断后最后一天 = start+15', trunc.data.days?.[15])
+
+    ok((await W('GET', '/api/weather?start=2026-09-20&end=2026-09-24')).status === 400, '缺 place → 400')
+    ok((await W('GET', '/api/weather?place=%E6%88%90%E9%83%BD&start=09-20&end=2026-09-24')).status === 400, '日期格式非法 → 400')
+    ok((await W('GET', '/api/weather?place=%E6%88%90%E9%83%BD&start=2026-09-24&end=2026-09-20')).status === 400, 'start 晚于 end → 400')
+    ok((await W('POST', '/api/weather?place=%E6%88%90%E9%83%BD&start=2026-09-20&end=2026-09-24')).status === 405, 'POST → 405（weather 只读）')
+  }
 } finally {
   for (const inst of [main, hard, ident, cred, rt]) {
     if (inst.child) inst.child.kill()

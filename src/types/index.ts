@@ -398,6 +398,38 @@ export interface PersistShape {
   activeTripId: string | null
 }
 
+// ───────────────────────── 天气 ─────────────────────────
+
+/** 逐日天气（/api/weather 返回元素）。code 是 WMO 天气码，文案/图标映射在 src/utils/weather.ts */
+export interface WeatherDay {
+  date: string
+  /** WMO weather code；-1 表示上游未提供 */
+  code: number
+  tmax: number | null
+  tmin: number | null
+}
+
+/** GET /api/weather 响应（服务端代理 Open-Meteo，见 server/routes/weather.mjs） */
+export interface WeatherReply {
+  place: string
+  resolved: { name: string; lat: number; lng: number }
+  days: WeatherDay[]
+  /** true = 行程长度超过预报上限（免费档 16 天），只覆盖前段 */
+  truncated?: boolean
+  /** 数据来源标识：open-meteo / mock（测试） */
+  source: string
+}
+
+/** 天气本地缓存条目（离线可用，见 src/utils/weather.ts） */
+export interface WeatherCacheEntry {
+  /** 抓取时间戳（ms）。超过 TTL 后变 stale —— 仍可用于断网降级，但不再当新鲜数据 */
+  at: number
+  days: WeatherDay[]
+}
+
+/** 天气本地缓存整体形状：key = weatherCacheKey(...) */
+export type WeatherCache = Record<string, WeatherCacheEntry>
+
 // ───────────────────────── 云端同步 ─────────────────────────
 
 /**

@@ -64,6 +64,7 @@ import { createRealtime } from './lib/realtime.mjs'
 import { createAuthRouter } from './routes/auth.mjs'
 import { createGuidesRouter } from './routes/guides.mjs'
 import { createTripsRouter } from './routes/trips.mjs'
+import { createWeatherRouter } from './routes/weather.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const VERSION = '2.0.0'
@@ -149,6 +150,7 @@ const ctx = { http: http1, db, log, clock, identity, hub: WS_ENABLED ? hub : nul
 const authRouter = createAuthRouter(ctx)
 const guidesRouter = createGuidesRouter(ctx)
 const tripsRouter = createTripsRouter(ctx)
+const weatherRouter = createWeatherRouter(ctx)
 
 // ───────────────────────── 请求管线 ─────────────────────────
 
@@ -212,6 +214,7 @@ async function route(req, res, url) {
   if (await authRouter.handle(req, res, url)) return true
   if (await tripsRouter.handle(req, res, url)) return true
   if (await guidesRouter.handle(req, res, url)) return true
+  if (await weatherRouter.handle(req, res, url)) return true
 
   return http1.fail(req, res, 404, 'not found')
 }

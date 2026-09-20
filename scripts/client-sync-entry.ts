@@ -20,6 +20,17 @@ import { encodeHlc, cmpHlc, recordHlc, createHlc } from '../src/services/hlc'
 import { MERGE_META_KEYS, mergeRecord } from '../src/services/lww'
 import { identityValid, loginErrorText } from '../src/services/identity'
 import { backoffDelay, toWsUrl } from '../src/services/realtime'
+import { fetchTripWeather, type WeatherStore } from '../src/services/weather'
+import {
+  isRainy,
+  loadWeatherCache,
+  pruneWeatherCache,
+  weatherBrief,
+  weatherCacheKey,
+  weatherEmoji,
+  weatherText
+} from '../src/utils/weather'
+import type { WeatherCache } from '../src/types'
 import { createHarness } from './lib/test-harness.mjs'
 
 type Device = 'A' | 'B' | 'C'
@@ -1299,6 +1310,76 @@ section('[14] 集合点/共享位置：设置 / 同步 / 并发位置上报 / �
   // resetAll 清空本地两类记录
   B.resetAll()
   ok(B.meetups.length === 0 && B.locations.length === 0, 'resetAll 后本地集合点/位置清空')
+}
+
+section('[15] 天气：WMO 映射 / 带伞 / 本地缓存与断网降级')
+{
+  // ── 映射纯函数 ──
+  ok(weatherText(0) === '晴' && weatherText(65) === '大雨', 'WMO 码 → 文案', [weatherText(0), weatherText(65)])
+  ok(isRainy(61) && isRainy(63) && isRainy(80) && isRainy(95), '各类降雨都算「雨天」（毛毛雨/雨/阵雨/雷雨）')
+  ok(!isRainy(0) && !isRainy(3) && !isRainy(71) && !isRainy(75), '晴/阴/雪不算雨天（雪不带伞）')
+  ok(weatherEmoji(0) !== '' && weatherEmoji(61) !== '', '每种码都有 emoji 展示')
+  ok(weatherText(999) === '—', '未知码回「—」而不是崩溃')
+
+  const brief = weatherBrief({ date: '2026-10-01', code: 63, tmax: 24.4, tmin: 17.6 })
+  ok(brief.includes('中雨') && brief.includes('记得带伞') && brief.includes('18-24°'), '雨天 brief 带伞提示 + 温度取整', brief)
+  ok(!weatherBrief({ date: '2026-10-01', code: 0, tmax: 30, tmin: 20 }).includes('带伞'), '晴天不提示带伞')
+
+  // ── 缓存纯函数 ──
+  ok(weatherCacheKey(' 成都 ', '2026-10-01', '2026-10-03') === '成都|2026-10-01|2026-10-03', '缓存键归一（去空格）')
+  ok(Object.keys(loadWeatherCache('not json')).length === 0, '坏 JSON 整体回空')
+  ok(Object.keys(loadWeatherCache('{"a":{"at":"x","days":[]}}')).length === 0, 'at 非数字的条目被剔除')
+  ok(Object.keys(loadWeatherCache('{"a":{"at":1,"days":"no"}}')).length === 0, 'days 非数组的条目被剔除')
+  ok(loadWeatherCache('{"a":{"at":1,"days":[{"date":"2026-10-01","code":61}]}}').a.days[0].code === 61, '缺 tmax/tmin 的日子兜成 null')
+
+  // 容量驱逐：超过上限丢最旧的 at，不按 TTL 清（stale 值要留着兜断网）
+  const big: WeatherCache = {}
+  for (let i = 0; i < 55; i += 1) big[`k${i}`] = { at: i, days: [] }
+  const pruned = pruneWeatherCache(big)
+  ok(Object.keys(pruned).length === 50, '超出容量裁到 50')
+  ok(!('k0' in pruned) && !('k4' in pruned) && 'k54' in pruned && 'k5' in pruned, '驱逐的是最旧的 5 条')
+
+  // ── fetchTripWeather：内存 store + 注入 backend ──
+  const mem: Record<string, string> = {}
+  const store: WeatherStore = { get: () => mem.tx ?? '', set: (r) => (mem.tx = r) }
+  let calls = 0
+  const reply = {
+    place: '成都',
+    resolved: { name: '成都', lat: 30.65, lng: 104.06 },
+    days: [
+      { date: '2026-10-01', code: 0, tmax: 28, tmin: 18 },
+      { date: '2026-10-02', code: 63, tmax: 24, tmin: 17 },
+      { date: '2026-10-03', code: 3, tmax: 22, tmin: 16 }
+    ],
+    source: 'mock'
+  }
+  const backend = { getWeather: async () => { calls += 1; return reply } } as never
+
+  const r1 = await fetchTripWeather('成都', '2026-10-01', '2026-10-03', { backend, store })
+  ok(r1 !== null && !r1.stale && r1.byDate.size === 3, '首次拉取成功并建 Map', r1?.byDate.size)
+  ok(r1?.byDate.get('2026-10-02')?.code === 63, '按日期索引正确')
+  ok(calls === 1, '网络恰好请求一次')
+
+  const r2 = await fetchTripWeather('成都', '2026-10-01', '2026-10-03', { backend, store })
+  ok(calls === 1 && !r2?.stale && r2?.byDate.size === 3, 'TTL 内二次请求走缓存，不再打网络')
+
+  const r3 = await fetchTripWeather('成都 ', '2026-10-01', '2026-10-03', { backend, store })
+  ok(calls === 1, 'place 带空格也命中同一份缓存（键归一）')
+
+  // TTL 过期 + 网络挂 → stale 降级而不是 null
+  const raw = JSON.parse(mem.tx)
+  raw[weatherCacheKey('成都', '2026-10-01', '2026-10-03')].at = Date.now() - 7 * 3600 * 1000
+  mem.tx = JSON.stringify(raw)
+  const dead = { getWeather: async () => { throw new Error('boom') } }
+  const r4 = await fetchTripWeather('成都', '2026-10-01', '2026-10-03', { backend: dead as never, store })
+  ok(r4 !== null && r4.stale && r4.byDate.size === 3, '过期 + 网络失败 → 回 stale 缓存（离线可用）', r4?.stale)
+
+  // 无缓存 + 网络挂 → null（静默），不抛错
+  const emptyStore: WeatherStore = { get: () => '', set: () => {} }
+  const r5 = await fetchTripWeather('成都', '2026-10-01', '2026-10-03', { backend: dead as never, store: emptyStore })
+  ok(r5 === null, '无缓存 + 网络失败 → null（页面就不显示天气）')
+
+  ok(await fetchTripWeather('', '2026-10-01', '2026-10-03', { backend, store }) === null, '空目的地直接 null')
 }
 
 console.log(`\n===== 客户端同步结果：${H.pass} 通过 / ${H.fail} 失败 =====\n`)

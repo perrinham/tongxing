@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useTripStore } from '@/stores/trip'
 import { nav } from '@/utils/nav'
 import {
@@ -12,6 +12,8 @@ import {
   endTime,
   todayISO
 } from '@/utils/format'
+import { fetchTripWeather } from '@/services/weather'
+import { weatherBrief, type WeatherDay } from '@/utils/weather'
 import AppNav from '@/components/AppNav.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import AppAvatar from '@/components/AppAvatar.vue'
@@ -81,6 +83,32 @@ const openPolls = computed(() =>
 )
 const allPolls = computed(() => (trip.value ? store.pollsOf(trip.value.id) : []))
 const meetup = computed(() => (trip.value ? store.meetupOf(trip.value.id) : null))
+
+// ── 逐日天气：目的地 × 行程日期。静默加载，拉不到就不显示，绝不打扰行程主流程 ──
+const weatherMap = ref<Map<string, WeatherDay>>(new Map())
+
+/** 页面卸载后不再回写异步结果（与 TripViewPage 的 alive 守卫同款） */
+let alive = true
+onUnmounted(() => {
+  alive = false
+})
+
+watch(
+  () => [trip.value?.destination, trip.value?.startDate, trip.value?.endDate] as const,
+  async ([dest, start, end]) => {
+    if (!dest || !start || !end) {
+      weatherMap.value = new Map()
+      return
+    }
+    const r = await fetchTripWeather(dest, start, end)
+    if (!alive) return
+    // stale（断网降级的旧值）也显示 —— 有总比没有强
+    weatherMap.value = r ? r.byDate : new Map()
+  },
+  { immediate: true }
+)
+
+const weatherOf = (date: string): WeatherDay | null => weatherMap.value.get(date) || null
 
 function goPolls() {
   if (trip.value) nav.to('poll', { id: trip.value.id })
@@ -269,6 +297,9 @@ function goMap() {
           <p class="dh-sub">
             {{ shortDate(activeDay.date) }} {{ weekday(activeDay.date) }}
             <template v-if="daySpend > 0"> · 已花 {{ moneyBrief(daySpend, trip.currency) }}</template>
+          </p>
+          <p v-if="weatherOf(activeDay.date)" class="dh-weather">
+            {{ weatherBrief(weatherOf(activeDay.date)!) }}
           </p>
           <p v-if="activeDay.note" class="dh-tip">{{ activeDay.note }}</p>
         </div>
@@ -493,6 +524,13 @@ function goMap() {
 .dh-sub {
   font-size: 13px;
   color: var(--text-tertiary);
+  margin-top: 3px;
+}
+
+/* 逐日天气：紧跟日期行，雨天「记得带伞」同色同级 —— 是信息不是警示 */
+.dh-weather {
+  font-size: 13px;
+  color: var(--text-secondary);
   margin-top: 3px;
 }
 
