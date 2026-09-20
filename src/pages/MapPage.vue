@@ -224,7 +224,7 @@ onLoad((options: Record<string, any> | undefined) => {
         :scale="12"
         :markers="markers"
         :polyline="polyline"
-        :show-location="false"
+        :show-location="true"
         @markertap="onMarkerTap"
       />
       <div v-else class="map-empty">

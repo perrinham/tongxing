@@ -15,7 +15,7 @@
     },
     "permission": {
       "scope.userLocation": {
-        "desc": "用于在地图上展示行程地点、规划景点之间的路线，以及在行程成员间共享集合点与实时位置"
+        "desc": "用于展示行程地点、共享集合点与实时位置"
       }
     },
     "requiredPrivateInfos": [

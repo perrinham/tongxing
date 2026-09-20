@@ -98,17 +98,46 @@ function clearMeetup() {
 let locTimer: ReturnType<typeof setInterval> | null = null
 const SHARE_INTERVAL_MS = 15000
 
-function reportOnce() {
-  uni.getLocation({
-    type: 'gcj02',
-    isHighAccuracy: true,
-    success: (r) => {
-      store.updateLocation(tripId.value, r.latitude, r.longitude, r.accuracy ?? 0)
-    },
-    fail: () => {
-      uni.showToast({ title: '定位失败，请检查位置权限', icon: 'none' })
-    }
+/**
+ * 高精度定位：isHighAccuracy 必须配 highAccuracyExpireTime —— 否则微信常把
+ * 缓存/网络定位（误差几百米）直接返回，成员位置就会「不准」。这里给 4s 等待
+ * GPS 收敛；若拿到的精度仍然很差（>ACC_BAD 米，室内/基站定位），再试一次，
+ * 两次取精度好的那个上报。
+ */
+let reporting = false
+const ACC_BAD = 300
+
+function getLocationOnce(): Promise<UniApp.GetLocationSuccess> {
+  return new Promise((resolve, reject) => {
+    uni.getLocation({
+      type: 'gcj02',
+      isHighAccuracy: true,
+      highAccuracyExpireTime: 4000,
+      success: resolve,
+      fail: reject
+    })
   })
+}
+
+async function reportOnce() {
+  if (reporting) return
+  reporting = true
+  try {
+    let best = await getLocationOnce()
+    if ((best.accuracy ?? 9999) > ACC_BAD) {
+      try {
+        const retry = await getLocationOnce()
+        if ((retry.accuracy ?? 9999) < (best.accuracy ?? 9999)) best = retry
+      } catch {
+        /* 重试失败就用第一次的结果 */
+      }
+    }
+    store.updateLocation(tripId.value, best.latitude, best.longitude, best.accuracy ?? 0)
+  } catch {
+    uni.showToast({ title: '定位失败，请检查位置权限', icon: 'none' })
+  } finally {
+    reporting = false
+  }
 }
 
 function startTimer() {
@@ -140,8 +169,11 @@ function toggleShare() {
 }
 
 onShow(() => {
-  // 已在共享状态时回到本页，恢复定时上报
-  if (sharing.value) startTimer()
+  // 已在共享状态时回到本页：立即刷一次位置再恢复定时上报
+  if (sharing.value) {
+    reportOnce()
+    startTimer()
+  }
 })
 
 onHide(stopTimer)
@@ -175,11 +207,20 @@ function distOf(loc: LocationShare): string {
   const mine = myLoc.value
   if (!mine || (loc.id === mine.id)) return ''
   const d = distMeters(mine.lat, mine.lng, loc.lat, loc.lng)
-  return d < 1000 ? `距你 ${Math.round(d)} 米` : `距你 ${(d / 1000).toFixed(1)} 公里`
+  /* 两端定位误差叠加：距离比合并精度还近就别报数字了（数字会跳，看着「不准」） */
+  const spread = Math.max(mine.accuracy ?? 0, loc.accuracy ?? 0, 30)
+  if (d < spread) return '就在你附近'
+  return d < 1000 ? `距你约 ${Math.round(d)} 米` : `距你约 ${(d / 1000).toFixed(1)} 公里`
+}
+
+/** 精度标签：精度差的时候如实告知（±Xm），别让人猜为什么圆圈那么大 */
+function accOf(loc: LocationShare): string {
+  const a = loc.accuracy ?? 0
+  return a > 50 ? `精度 ±${Math.round(a)}米` : ''
 }
 
 function locSub(loc: LocationShare): string {
-  const parts = [distOf(loc), timeAgo(loc.updatedAt ?? 0)].filter(Boolean)
+  const parts = [distOf(loc), accOf(loc), timeAgo(loc.updatedAt ?? 0)].filter(Boolean)
   return parts.join(' · ')
 }
 
