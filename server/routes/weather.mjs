@@ -138,15 +138,20 @@ export function createWeatherRouter({ http, log, env = process.env }) {
       return true
     }
 
-    // 范围截断：超出预报上限的部分直接不返回（客户端缺哪天就不显示哪天）
-    const spanDays =
-      Math.round((Date.parse(`${end}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86400_000) + 1
-    const clampedEnd =
-      spanDays > MAX_RANGE_DAYS
-        ? new Date(Date.parse(`${start}T00:00:00Z`) + (MAX_RANGE_DAYS - 1) * 86400_000)
-            .toISOString()
-            .slice(0, 10)
-        : end
+    // 范围双重夹紧（客户端缺哪天就不显示哪天）：
+    //   a) 行程长度 ≤ MAX_RANGE_DAYS（免费档单次范围上限）
+    //   b) 结尾不得超出「今天 + MAX_RANGE_DAYS-1」的预报窗口 —— 否则 Open-Meteo 直接 400
+    //      （真实案例：行程 09-22~10-07，16 天但尾巴超出窗口，上游 400 → 整个行程没天气）
+    // 窗口按 UTC「今天」算：比北京时间保守最多一天，但保证不会越界报错。
+    const mock = env.TX_WEATHER_MOCK === '1'
+    const todayUTC = new Date().toISOString().slice(0, 10)
+    const hardEnd = new Date(Date.parse(`${todayUTC}T00:00:00Z`) + (MAX_RANGE_DAYS - 1) * 86400_000)
+      .toISOString()
+      .slice(0, 10)
+    const lenEnd = new Date(Date.parse(`${start}T00:00:00Z`) + (MAX_RANGE_DAYS - 1) * 86400_000)
+      .toISOString()
+      .slice(0, 10)
+    const clampedEnd = [end, lenEnd, hardEnd].sort()[0]
     const truncated = clampedEnd !== end
 
     const key = cacheKey(place, start, end)
@@ -156,14 +161,32 @@ export function createWeatherRouter({ http, log, env = process.env }) {
       return true
     }
 
-    const mock = env.TX_WEATHER_MOCK === '1'
+    // 行程完全在预报窗口之外（出发日比 hardEnd 还晚）：没有可预报的日子，
+    // 直接回空 days（客户端就不显示），不打上游
+    if (clampedEnd < start) {
+      const empty = {
+        place,
+        resolved: { name: place, lat: 0, lng: 0 },
+        days: [],
+        truncated: true,
+        source: mock ? 'mock' : 'none'
+      }
+      cachePut(key, empty)
+      http.send(req, res, 200, empty)
+      return true
+    }
+
     try {
       let payload
       if (mock) {
+        const n =
+          Math.round(
+            (Date.parse(`${clampedEnd}T00:00:00Z`) - Date.parse(`${start}T00:00:00Z`)) / 86400_000
+          ) + 1
         payload = {
           place,
           resolved: { name: place, lat: 30.65, lng: 104.06 },
-          days: mockDays(start, Math.min(spanDays, MAX_RANGE_DAYS)),
+          days: mockDays(start, Math.max(n, 0)),
           ...(truncated ? { truncated: true } : {}),
           source: 'mock'
         }

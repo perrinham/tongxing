@@ -2332,21 +2332,34 @@ try {
     const wxs = await ensure('天气', 8798, { TX_WEATHER_MOCK: '1', RATE_LIMIT: '5000' })
     extraChildren.push(wxs.child)
     const W = (m, p) => req(wxs.base, m, p)
+    /** 相对 UTC 今天的 ISO 日期（与服务端窗口计算同口径，测试不随日期漂移） */
+    const dstr = (offset) => new Date(Date.now() + offset * 86400_000).toISOString().slice(0, 10)
+    const q = (s, e) => `place=%E6%88%90%E9%83%BD&start=${s}&end=${e}`
 
-    const ok1 = await W('GET', '/api/weather?place=%E6%88%90%E9%83%BD&start=2026-09-20&end=2026-09-24')
+    const ok1 = await W('GET', `/api/weather?${q(dstr(1), dstr(5))}`)
     ok(ok1.status === 200 && ok1.data.source === 'mock', 'GET 正常返回 200 + mock 来源', ok1.status)
     ok(Array.isArray(ok1.data.days) && ok1.data.days.length === 5, '5 天范围返回 5 条逐日', ok1.data.days?.length)
-    ok(ok1.data.days?.[0]?.date === '2026-09-20' && ok1.data.days?.[4]?.date === '2026-09-24', '日期与请求范围逐日对齐')
+    ok(ok1.data.days?.[0]?.date === dstr(1) && ok1.data.days?.[4]?.date === dstr(5), '日期与请求范围逐日对齐')
     ok(ok1.data.days?.[1]?.code === 63, 'mock 序列必现雨天码（带伞链路可断言）', ok1.data.days?.[1])
     ok(ok1.data.resolved?.lat === 30.65 && ok1.data.resolved?.lng === 104.06, 'resolved 带坐标')
     ok(typeof ok1.data.days?.[0]?.tmax === 'number' && typeof ok1.data.days?.[0]?.tmin === 'number', '温度字段齐全')
 
-    const cached = await W('GET', '/api/weather?place=%E6%88%90%E9%83%BD&start=2026-09-20&end=2026-09-24')
+    const cached = await W('GET', `/api/weather?${q(dstr(1), dstr(5))}`)
     ok(cached.status === 200 && JSON.stringify(cached.data) === JSON.stringify(ok1.data), '同参数二次请求命中内存缓存（结果逐字节一致）')
 
-    const trunc = await W('GET', '/api/weather?place=%E6%88%90%E9%83%BD&start=2026-09-20&end=2026-10-10')
+    // 行程长度截断：21 天行程 → 只有前 16 天（免费档单次范围上限）
+    const trunc = await W('GET', `/api/weather?${q(dstr(0), dstr(20))}`)
     ok(trunc.status === 200 && trunc.data.days.length === 16 && trunc.data.truncated === true, '21 天请求被截到 16 天并标 truncated', trunc.data.days?.length)
-    ok(trunc.data.days?.[15]?.date === '2026-10-05', '截断后最后一天 = start+15', trunc.data.days?.[15])
+    ok(trunc.data.days?.[15]?.date === dstr(15), '截断后最后一天 = start+15', trunc.data.days?.[15])
+
+    // 预报窗口夹紧：行程 26 天且末尾超出「今天+15」（Open-Meteo 对窗口外 end 会直接 400）
+    const win = await W('GET', `/api/weather?${q(dstr(5), dstr(30))}`)
+    ok(win.status === 200 && win.data.days.length === 11 && win.data.truncated === true, '窗口外尾段被夹紧：start+5 起只剩 11 天', win.data.days?.length)
+    ok(win.data.days?.[10]?.date === dstr(15), '夹紧后最后一天 = 今天+15', win.data.days?.[10])
+
+    // 完全在窗口外：不查上游，直接空 days
+    const far = await W('GET', `/api/weather?${q(dstr(30), dstr(40))}`)
+    ok(far.status === 200 && far.data.days.length === 0 && far.data.truncated === true, '行程完全超出预报窗口 → 空 days 不报错', far.data.days?.length)
 
     ok((await W('GET', '/api/weather?start=2026-09-20&end=2026-09-24')).status === 400, '缺 place → 400')
     ok((await W('GET', '/api/weather?place=%E6%88%90%E9%83%BD&start=09-20&end=2026-09-24')).status === 400, '日期格式非法 → 400')
