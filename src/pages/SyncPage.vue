@@ -2,7 +2,8 @@
 import { computed, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { useTripStore } from '@/stores/trip'
-import { BACKEND_BASE_URL, SYNC_ENABLED } from '@/config'
+import { BACKEND_ENABLED, SYNC_ENABLED } from '@/config'
+import { getBackendBase, setBackendBase, resetBackendBase } from '@/services/backendBase'
 import { loginErrorText, shortIdentity } from '@/services/identity'
 import type { ClaimAllResult } from '@/stores/trip'
 import { useToast } from '@/utils/toast'
@@ -17,7 +18,6 @@ const joinMsg = ref('')
 const busy = ref(false)
 const online = ref<boolean | null>(null)
 const { toast, toastShow } = useToast()
-
 // 账号（微信 openid）
 const loggedIn = computed(() => store.isLoggedIn())
 const identityLabel = computed(() => shortIdentity(store.sync.identity))
@@ -63,6 +63,39 @@ const desc = computed(() => {
 async function probe() {
   online.value = null
   online.value = await store.pingBackend()
+}
+
+// ── 自建服务器地址（运行时可改，真机连局域网 IP / 免费容器域名）──
+const base = ref(getBackendBase())
+const baseInput = ref(base.value)
+const baseBusy = ref(false)
+
+async function applyBase() {
+  void probe()
+  store.restartRealtime()
+  await store.syncAll().catch(() => {})
+}
+
+async function saveBase() {
+  if (baseBusy.value) return
+  baseBusy.value = true
+  const saved = setBackendBase(baseInput.value)
+  baseBusy.value = false
+  if (!saved) {
+    toastShow('地址要以 http:// 或 https:// 开头')
+    return
+  }
+  base.value = saved
+  toastShow('已保存，正在重连…')
+  await applyBase()
+}
+
+async function resetBase() {
+  resetBackendBase()
+  base.value = getBackendBase()
+  baseInput.value = base.value
+  toastShow('已恢复默认地址')
+  await applyBase()
 }
 
 onLoad(() => {
@@ -383,7 +416,7 @@ async function doJoin() {
         </div>
         <div class="kv">
           <span class="muted">服务端</span>
-          <span class="ellipsis val">{{ BACKEND_BASE_URL }}</span>
+          <span class="ellipsis val">{{ base }}</span>
         </div>
         <div class="kv">
           <span class="muted">连通性</span>
@@ -391,10 +424,30 @@ async function doJoin() {
             {{ online === null ? '检测中…' : online ? '可达' : '连不上' }}
           </span>
         </div>
+
+        <!-- 自建服务器地址：真机连局域网 IP、或免费容器域名，按设备保存 -->
+        <div class="base-edit">
+          <input
+            v-model="baseInput"
+            class="base-input"
+            placeholder="http://192.168.x.x:8787"
+            :disabled="baseBusy"
+            confirm-type="done"
+            @confirm="saveBase"
+          />
+          <div class="base-actions">
+            <button class="base-btn primary" :disabled="baseBusy" @click="saveBase">保存并连接</button>
+            <button class="base-btn" :disabled="baseBusy" @click="resetBase">恢复默认</button>
+          </div>
+          <p class="base-tip">
+            真机请填电脑的局域网 IP（手机与电脑同一 Wi-Fi，电脑上先 npm run server）；
+            体验版需在右上角「…」打开开发调试，才能连自建地址。
+          </p>
+        </div>
       </div>
 
       <p class="foot">
-        目前后端用共享密钥保护，只适合熟人小圈子。要真正的多用户隔离，需要接微信登录。
+        登录与同步使用你的微信身份，行程只有成员可见。自建服务器地址按设备保存，随时可改回默认。
       </p>
     </div>
 
@@ -664,6 +717,52 @@ async function doJoin() {
   font-size: 13px;
   padding: 8px 0;
   border-bottom: 1px solid var(--line);
+}
+
+.base-edit {
+  padding-top: 12px;
+}
+
+.base-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: var(--bg-page, #f6f6f8);
+  font-size: 13px;
+  color: var(--text-primary);
+}
+
+.base-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.base-btn {
+  flex: 1;
+  padding: 9px 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-page, #f0f0f4);
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.base-btn.primary {
+  background: var(--primary, #3b82f6);
+  color: #fff;
+}
+
+.base-btn[disabled] {
+  opacity: 0.55;
+}
+
+.base-tip {
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-tertiary);
 }
 
 .kv:last-child {

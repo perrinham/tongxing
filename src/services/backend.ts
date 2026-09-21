@@ -10,7 +10,8 @@
  *
  * 后端不可达时 Promise 会 reject，由调用方回退本地，不阻塞 UI。
  */
-import { BACKEND_ENABLED, BACKEND_BASE_URL, BACKEND_TOKEN, REQUEST_TIMEOUT_MS } from '@/config'
+import { BACKEND_ENABLED, BACKEND_TOKEN, REQUEST_TIMEOUT_MS } from '@/config'
+import { getBackendBase } from '@/services/backendBase'
 import type {
   CityGuide,
   CityStatus,
@@ -101,7 +102,7 @@ async function once<T>(
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     uni.request({
-      url: BACKEND_BASE_URL + path,
+      url: getBackendBase() + path,
       method,
       data: body as Record<string, unknown> | undefined,
       header: makeHeaders(sessionToken, connId),

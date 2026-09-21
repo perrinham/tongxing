@@ -62,9 +62,9 @@ import {
   REALTIME_RETRY_BASE_MS,
   REALTIME_RETRY_MAX_MS,
   REALTIME_HELLO_TIMEOUT_MS,
-  BACKEND_BASE_URL,
   BACKEND_TOKEN
 } from '@/config'
+import { getBackendBase } from '@/services/backendBase'
 
 /** 待推送墓碑的本地上限，超出丢弃最旧的（正常使用远远到不了） */
 const MAX_LOCAL_TOMBSTONES = 800
@@ -1033,7 +1033,8 @@ export const useTripStore = defineStore('trip', {
     },
 
     /**
-     * 异步生成：本地 6 城未命中时先拉高德在线库，抓不到再回退本地模板。
+     * 异步生成：本地 6 城未命中时先拉高德在线库，抓不到则抛错（页面层展示重试提示，
+     * 不做静默回退 —— 旧版会兜底成成都的行程）。
      * 页面层统一走这个。
      */
     async generateAsync(tripId: string, input: GenerateInput): Promise<string> {
@@ -1495,7 +1496,7 @@ export const useTripStore = defineStore('trip', {
       let rt = realtimes.get(this)
       if (rt) return rt
       rt = createRealtime({
-        url: toWsUrl(BACKEND_BASE_URL, REALTIME_PATH),
+        url: toWsUrl(getBackendBase(), REALTIME_PATH),
         token: () => (identityValid(this.sync.identity) ? String(this.sync.identity?.token || '') : ''),
         key: () => BACKEND_TOKEN,
         deviceId: () => this.sync.deviceId,
