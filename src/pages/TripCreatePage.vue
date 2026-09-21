@@ -4,7 +4,7 @@ import { useTripStore } from '@/stores/trip'
 import { nav } from '@/utils/nav'
 import { availableCities } from '@/utils/itinerary'
 import { isKnownCity } from '@/data/poi'
-import { inputTips, type AmapPoi } from '@/services/amap'
+import { inputTips, resolveCityName, type AmapPoi } from '@/services/amap'
 import { addDays, daysBetween, todayISO } from '@/utils/format'
 import AppNav from '@/components/AppNav.vue'
 import AppIcon from '@/components/AppIcon.vue'
@@ -50,9 +50,14 @@ function onDestInput(e: Event) {
 }
 
 function pickTip(t: AmapPoi) {
-  destination.value = t.city || t.name
   showTips.value = false
   tips.value = []
+  // 候选名可能是 POI（「大理站」）而 t.city 是完整区划串，都不能直接当地点；
+  // 用 adcode 反查标准城市名（「大理市」），反查失败回退候选名
+  void (async () => {
+    const standard = t.adcode ? await resolveCityName(t.adcode) : null
+    destination.value = standard || t.name
+  })()
 }
 
 function shiftEnd() {
@@ -134,6 +139,7 @@ function submit() {
               <span class="tip-district ellipsis">{{ t.city || t.address }}</span>
             </button>
           </view>
+          <div class="chips-label">热门城市</div>
           <div class="chips">
             <button
               v-for="c in cities"
@@ -146,7 +152,7 @@ function submit() {
             </button>
           </div>
           <p class="tip">{{ isKnownDest
-            ? `内置 ${cities.length} 个城市的精修点位库，选这些出最完整的草稿`
+            ? `内置 ${cities.length} 个城市的精修点位库；其它城市直接输入名称，同样能生成`
             : '走高德在线检索该城市的景点与美食，联网即可生成' }}</p>
         </div>
 
@@ -234,6 +240,12 @@ function submit() {
 <style scoped>
 .block {
   margin-top: 8px;
+}
+
+.chips-label {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-tertiary);
 }
 
 .chips {

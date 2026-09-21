@@ -116,25 +116,52 @@ function distanceKm(a: { lng: number; lat: number }, b: { lng: number; lat: numb
 }
 
 /**
+ * 城市级缓存：同一城市本次会话只抓一次（生成失败重试、多设备重进都不再打高德）。
+ * 缓存的是高德检索的幂等只读结果，不承载任何共享状态语义。
+ */
+const seedCache = new Map<string, CitySeed>()
+
+/** 小并发跑任务队列：个人 key QPS 低，6 路并发必触发限流，压到 2 路 */
+async function mapLimit<T>(jobs: (() => Promise<T>)[], limit: number): Promise<T[]> {
+  const out: T[] = new Array(jobs.length)
+  let next = 0
+  await Promise.all(
+    Array.from({ length: Math.min(limit, jobs.length) }, async () => {
+      while (next < jobs.length) {
+        const i = next++
+        out[i] = await jobs[i]()
+      }
+    })
+  )
+  return out
+}
+
+/**
  * 拉取一个城市的高德候选池。
- * 返回 null = 高德不可用 / 该地名检索质量差 —— 调用方回退本地模板。
+ * 返回 null = 高德不可用 / 该地名检索质量差 —— 调用方按「明确失败」处理。
  */
 export async function buildCityFromAmap(cityName: string): Promise<CitySeed | null> {
   if (!AMAP_ENABLED || !cityName.trim()) return null
   const city = cityName.trim()
+  const cached = seedCache.get(city)
+  if (cached) return cached
 
-  try {
-    // 五路并发检索 + 市中心定位（geocode 失败不影响主体，只影响远郊标记）
+  const fetchOnce = async (): Promise<CitySeed | null> => {
+    // 五路检索压成 2 并发 + 市中心定位（geocode 失败不影响主体，只影响远郊标记）
     // 景点三路：国家级景点（硬核地标）+「风景名胜」「景区」关键词 ——
     // 纯类型翻页排序与质量无关，会漏掉橘子洲这类不带「寺庙」尾缀的大地标
-    const [landmarkRaw, kwScenicRaw, kwSpotRaw, foodRaw, shopRaw, center] = await Promise.all([
-      searchPoiWithTypes('', city, NATURAL_LANDMARK_TYPES),
-      searchPoiWithTypes(SPOT_KEYWORD, city),
-      searchPoiWithTypes(SCENIC_KEYWORD, city),
-      searchPoiWithTypes('', city, FOOD_TYPES),
-      searchPoiWithTypes('', city, SHOP_TYPES),
-      geocode(city).catch(() => null)
-    ])
+    const results = await mapLimit(
+      [
+        () => searchPoiWithTypes('', city, NATURAL_LANDMARK_TYPES),
+        () => searchPoiWithTypes(SPOT_KEYWORD, city),
+        () => searchPoiWithTypes(SCENIC_KEYWORD, city),
+        () => searchPoiWithTypes('', city, FOOD_TYPES),
+        () => searchPoiWithTypes('', city, SHOP_TYPES)
+      ],
+      2
+    )
+    const [landmarkRaw, kwScenicRaw, kwSpotRaw, foodRaw, shopRaw] = results
+    const center = await geocode(city).catch(() => null)
     const spotRaw = [...landmarkRaw, ...kwScenicRaw, ...kwSpotRaw]
 
     const byRating = (l: AmapPoiLike[]) =>
@@ -182,7 +209,17 @@ export async function buildCityFromAmap(cityName: string): Promise<CitySeed | nu
       intro: `高德在线点位库（景点 ${spotSeeds.length} · 商圈 ${shopSeeds.length} · 餐饮 ${foodSeeds.length}）`,
       pois: [...spotSeeds, ...shopSeeds, ...foodSeeds]
     }
-  } catch {
-    return null
   }
+
+  // 限流是抖动型失败（一轮里总有部分路空手而归），整体重试一次能救回大半；
+  // 两次都拿不满才按失败上报
+  const tryOnce = await fetchOnce().catch(() => null)
+  if (tryOnce) {
+    seedCache.set(city, tryOnce)
+    return tryOnce
+  }
+  await new Promise((r) => setTimeout(r, 700))
+  const retried = await fetchOnce().catch(() => null)
+  if (retried) seedCache.set(city, retried)
+  return retried
 }

@@ -132,6 +132,12 @@ export async function generateItineraryAsync(input: GenerateInput): Promise<Gene
       const out = assemble(online, true, input, totalDays, pace, prefs)
       return out
     }
+    // 在线抓取失败（断网/限流/地名检索质量差）：明确报错让用户重试。
+    // ⚠️ 绝不能静默回退 matchCity —— 那会兜底到 CITIES[0]（成都），用户要洛阳
+    // 却拿到一份成都的行程，比失败糟糕得多。
+    throw new Error(
+      `未能从高德拉取「${input.destination}」的点位（可能在限流或断网），请稍后重试`
+    )
   }
 
   const city = matchCity(input.destination)

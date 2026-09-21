@@ -21,6 +21,8 @@ onUnmounted(() => {
 })
 const result = ref('')
 const error = ref('')
+/** 在线城市的拉取提示（本地库城市为空） */
+const loadingTip = ref('')
 
 const trip = computed(() => store.trips.find((t) => t.id === tripId.value) || null)
 const isKnownDest = computed(() => !!trip.value && isKnownCity(trip.value.destination))
@@ -52,6 +54,8 @@ async function run() {
   }
   generating.value = true
   error.value = ''
+  // 非库城市要实时问高德（1-2s，限流重试时更久），给用户明说在干嘛
+  loadingTip.value = isKnownDest.value ? '' : `正在拉取「${trip.value.destination}」的高德点位，约 1-2 秒…`
   // 让 loading 状态先渲染出来，再跑（本地库同步完成；在线城市要等高德检索，约 1-2s）
   setTimeout(async () => {
     try {
@@ -69,9 +73,11 @@ async function run() {
         if (alive) nav.replace('itinerary')
       }, 620)
     } catch (e) {
-      error.value = '生成失败，换个偏好再试一次'
+      // 在线城市的失败带具体原因（限流/断网），比笼统的「生成失败」可行动
+      error.value = (e as Error)?.message || '生成失败，换个偏好再试一次'
     } finally {
       generating.value = false
+      loadingTip.value = ''
     }
   }, 120)
 }
@@ -160,6 +166,7 @@ async function run() {
         <p class="done-sub">{{ result }}</p>
       </div>
 
+      <p v-if="loadingTip && generating" class="loading-tip">{{ loadingTip }}</p>
       <p v-if="error" class="err">{{ error }}</p>
     </div>
 
@@ -342,6 +349,13 @@ async function run() {
   margin-top: 14px;
   font-size: 13px;
   color: var(--danger);
+  text-align: center;
+}
+
+.loading-tip {
+  margin-top: 14px;
+  font-size: 13px;
+  color: var(--text-secondary);
   text-align: center;
 }
 

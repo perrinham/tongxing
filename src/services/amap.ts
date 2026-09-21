@@ -13,6 +13,8 @@ export interface AmapPoi {
   lng: number
   lat: number
   city?: string
+  /** 行政区划码（inputtips 返回）；用它反查标准城市名 */
+  adcode?: string
   /** 高德评分（biz_ext.rating），无评分时不带 */
   rating?: number
 }
@@ -33,32 +35,52 @@ export interface RouteResult {
 
 const BASE = 'https://restapi.amap.com'
 
+/** 限流信息（info 含 LIMIT/QPS/CUQPS 时视为被限流，延迟重试一次即可恢复） */
+function isRateLimited(info: string | undefined): boolean {
+  return !!info && /LIMIT|QPS/i.test(info)
+}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 function req<T>(path: string, params: Record<string, string>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    uni.request({
-      url: BASE + path,
-      data: { key: AMAP_WEB_KEY, ...params },
-      method: 'GET',
-      success: (res) => {
-        const data = res.data as { status?: string; info?: string } & Record<string, unknown>
-        if (data && data.status === '1') resolve(data as unknown as T)
-        else reject(new Error(data?.info || '高德接口返回异常'))
-      },
-      fail: (err: { errMsg?: string }) => reject(new Error(err?.errMsg || '网络请求失败'))
+  const once = () =>
+    new Promise<T>((resolve, reject) => {
+      uni.request({
+        url: BASE + path,
+        data: { key: AMAP_WEB_KEY, ...params },
+        method: 'GET',
+        success: (res) => {
+          const data = res.data as { status?: string; info?: string } & Record<string, unknown>
+          if (data && data.status === '1') resolve(data as unknown as T)
+          else reject(new Error(data?.info || '高德接口返回异常'))
+        },
+        fail: (err: { errMsg?: string }) => reject(new Error(err?.errMsg || '网络请求失败'))
+      })
     })
+  // 个人 key 的 QPS 配额很低（输入联想 + 生成检索并发很容易触发），
+  // 被限流时退避一次再试；网络失败不重试（快速失败交给上层降级）
+  return once().catch(async (e: Error) => {
+    if (isRateLimited(e.message)) {
+      await sleep(450)
+      return once()
+    }
+    throw e
   })
 }
 
 /**
  * 解析高德 "lng,lat"。缺失 / NaN / 0,0 占位一律返回 null ——
  * 没有这层守卫，无坐标 POI（公交线路等）会静默变成 0,0 或 NaN 打进地图。
+ * ⚠️ loc 必须是字符串：inputtips 的行政区划候选 location 是空**数组** [],
+ * 不挡类型的话 loc.split 直接 TypeError，整个联想列表崩成空。
  */
-function parseLngLat(loc: string | undefined): { lng: number; lat: number } | null {
-  if (!loc) return null
+function parseLngLat(loc: string | undefined | null): { lng: number; lat: number } | null {
+  if (!loc || typeof loc !== 'string') return null
   const [lng, lat] = loc.split(',').map(Number)
   if (!Number.isFinite(lng) || !Number.isFinite(lat) || (lng === 0 && lat === 0)) return null
   return { lng, lat }
 }
+/** 仅供测试断言（inputtips 区划候选 location=[] 的类型守卫） */
+export { parseLngLat }
 
 /** POI 搜索（关键词 + 可选城市） */
 export async function searchPoi(keyword: string, city?: string): Promise<AmapPoi[]> {
@@ -114,15 +136,48 @@ export async function inputTips(keyword: string, city?: string): Promise<AmapPoi
   try {
     const data = await req<{ tips: any[] }>('/v3/assistant/inputtips', params)
     return (data.tips || [])
-      .filter((t) => t.location && t.location !== '[]')
+      // 区划类候选 location 是空数组 []，无坐标；只保留带坐标字符串的 POI 候选
+      .filter((t) => typeof t.location === 'string' && t.location && t.location !== '[]')
       .map((t) => {
         const pos = parseLngLat(t.location)
         if (!pos) return null
-        return { id: t.id || t.name, name: t.name, address: t.district || '', lng: pos.lng, lat: pos.lat, city: t.district }
+        return {
+          id: t.id || t.name,
+          name: t.name,
+          address: t.district || '',
+          lng: pos.lng,
+          lat: pos.lat,
+          // ⚠️ t.district 是完整区划串（「云南省大理白族自治州大理市」），
+          // 只配展示，**不能**当城市名写回目的地 —— 标准城市名用 adcode 反查
+          city: t.district,
+          adcode: t.adcode || undefined
+      }
       })
       .filter(Boolean) as AmapPoi[]
   } catch {
     return []
+  }
+}
+
+/**
+ * adcode -> 标准城市名（「532901」→「大理市」）。
+ *
+ * inputtips 的 district 是全路径区划串、name 可能是 POI 名（「大理站」），
+ * 都不适合直接当目的地；district 接口按 adcode 精确反查才是「大理市」。
+ * 失败返回 null，由调用方回退展示名。
+ */
+export async function resolveCityName(adcode: string): Promise<string | null> {
+  if (!AMAP_ENABLED || !adcode) return null
+  try {
+    const data = await req<{ districts: any[] }>('/v3/config/district', {
+      keywords: adcode,
+      subdistrict: '0',
+      filter: 'adcode'
+    })
+    const d = data.districts?.[0]
+    return d?.name || null
+  } catch {
+    return null
   }
 }
 

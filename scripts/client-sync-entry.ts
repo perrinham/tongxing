@@ -17,6 +17,7 @@ import { useTripStore } from '../src/stores/trip'
 import { bindStorage, createStorage, storage } from '../src/repository/storage'
 import type { SyncMeta } from '../src/types'
 import { encodeHlc, cmpHlc, recordHlc, createHlc } from '../src/services/hlc'
+import { parseLngLat } from '../src/services/amap'
 import { MERGE_META_KEYS, mergeRecord } from '../src/services/lww'
 import { identityValid, loginErrorText } from '../src/services/identity'
 import { backoffDelay, toWsUrl } from '../src/services/realtime'
@@ -1380,6 +1381,16 @@ section('[15] 天气：WMO 映射 / 带伞 / 本地缓存与断网降级')
   ok(r5 === null, '无缓存 + 网络失败 → null（页面就不显示天气）')
 
   ok(await fetchTripWeather('', '2026-10-01', '2026-10-03', { backend, store }) === null, '空目的地直接 null')
+}
+
+// ── [16] 高德坐标解析守卫（inputtips 区划候选 location=[] 曾把联想崩成空）──
+section('[16] 高德 parseLngLat 类型守卫')
+{
+  ok(parseLngLat('100.250635,25.589569')?.lng === 100.250635, '正常字符串解析出坐标')
+  ok(parseLngLat([] as never) === null, 'location 是数组（区划候选）→ null，不再 TypeError')
+  ok(parseLngLat('[]' as never) === null, "location 是字符串 '[]' → null")
+  ok(parseLngLat('0,0') === null, '0,0 占位 → null')
+  ok(parseLngLat(undefined) === null && parseLngLat('') === null, '缺失/空串 → null')
 }
 
 console.log(`\n===== 客户端同步结果：${H.pass} 通过 / ${H.fail} 失败 =====\n`)
