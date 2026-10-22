@@ -65,6 +65,7 @@ import { createAuthRouter } from './routes/auth.mjs'
 import { createGuidesRouter } from './routes/guides.mjs'
 import { createTripsRouter } from './routes/trips.mjs'
 import { createWeatherRouter } from './routes/weather.mjs'
+import { restoreIfEmpty, startBackupLoop } from './backup.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const VERSION = '2.0.0'
@@ -84,6 +85,14 @@ const DATA_DIR = process.env.DATA_DIR ? resolve(process.env.DATA_DIR) : join(__d
 const DB_FILE = join(DATA_DIR, 'travel.sqlite3')
 /** 旧版单文件 JSON 存档；首次启动时若存在且库为空，会自动导入（见 lib/db.mjs） */
 const LEGACY_JSON_FILE = join(DATA_DIR, 'db.json')
+
+// ── Space 仓库备份/恢复（Hugging Face 免费部署用，见 backup.mjs）──
+// 恢复必须在 createDb 之前：createDb 会在数据目录建空库，晚了就恢复不进去。
+const BACKUP_ENABLED = process.env.BACKUP_ENABLED === '1'
+const BACKUP_DIR = process.env.BACKUP_DIR ? resolve(process.env.BACKUP_DIR) : join(__dirname, '_backup')
+if (BACKUP_ENABLED) {
+  restoreIfEmpty({ dataDir: DATA_DIR, backupDir: BACKUP_DIR })
+}
 const PORT = envInt('PORT', 8787, 1, 65535)
 const MAX_BODY_BYTES = envInt('MAX_BODY_BYTES', 2 * 1024 * 1024, 1024, 64 * 1024 * 1024)
 const RATE_LIMIT = envInt('RATE_LIMIT', 300, 0, 100000)
@@ -387,6 +396,14 @@ server.listen(PORT, () => {
       pingMs: envInt('WS_PING_MS', 25_000, 1000, 600_000),
       coalesceMs: envInt('WS_COALESCE_MS', 80, 0, 5000)
     })
+  }
+  if (BACKUP_ENABLED) {
+    startBackupLoop({
+      dataDir: DATA_DIR,
+      backupDir: BACKUP_DIR,
+      intervalMin: envInt('BACKUP_INTERVAL_MIN', 60, 0, 24 * 60)
+    })
+    log.info('仓库备份已启用', { backupDir: BACKUP_DIR })
   }
   if (identity.devLogin) {
     log.warn('WX_DEV_LOGIN=1：未配置 WX_APPID/WX_SECRET，登录接口会用 code 推导假 openid —— 等于「自己声明自己是谁」，仅限本地与测试')
