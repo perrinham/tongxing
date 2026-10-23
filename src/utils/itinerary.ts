@@ -100,36 +100,58 @@ function slotTime(start: string, index: number, gapMinutes: number[], baseGap = 
   return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
 }
 
+/** 打选好的候选点位、排完天、铺完时间轴，逐个环节向页面「播报」 —— 流式渐显的节点 */
+export type GenStage = 'fetch' | 'score' | 'plan' | 'timeline'
+
+export interface GenStageInfo {
+  /** score/timeline：条数 */
+  count?: number
+  /** plan：天数 */
+  days?: number
+}
+
+export type GenStageSink = (stage: GenStage, info: GenStageInfo) => void
+
 /**
  * 规则引擎生成行程草稿（同步入口）。
  * 思路：选出候选 POI -> 打散远郊 -> 按地理近邻聚类分天 -> 按时间槽排布
  *
  * 目的地在本地 6 城库里时直接同步生成；不在时走异步入口（先问高德）。
+ * onStage 是可选的进度播报：生成器仍是「一次算完再返回」，阶段标记只是
+ * 给页面做流式渐显的锚点（页面自己排队逐字打出，见 TripGeneratePage）。
  */
-export function generateItinerary(input: GenerateInput): GenerateOutput {
+export function generateItinerary(
+  input: GenerateInput,
+  onStage?: GenStageSink
+): GenerateOutput {
   const city = matchCity(input.destination)
   const known = isKnownCity(input.destination)
   const totalDays = Math.max(1, daysBetween(input.startDate, input.endDate))
   const pace = PACE_SLOTS[input.pace] || PACE_SLOTS.normal
   const prefs = input.prefs || []
 
-  return assemble(city, known, input, totalDays, pace, prefs)
+  return assemble(city, known, input, totalDays, pace, prefs, onStage)
 }
 
 /**
  * 异步入口：本地库未命中时先拉高德在线库，抓不到再回退本地模板。
  * 页面层统一走这个（generateItinerary 保留给旧调用方/测试）。
  */
-export async function generateItineraryAsync(input: GenerateInput): Promise<GenerateOutput> {
+export async function generateItineraryAsync(
+  input: GenerateInput,
+  onStage?: GenStageSink
+): Promise<GenerateOutput> {
   const known = isKnownCity(input.destination)
   const totalDays = Math.max(1, daysBetween(input.startDate, input.endDate))
   const pace = PACE_SLOTS[input.pace] || PACE_SLOTS.normal
   const prefs = input.prefs || []
 
   if (!known) {
+    // 在线拉取要 1-2s，是整个链路里最值得先「流」出来的环节
+    onStage?.('fetch', {})
     const online = await buildCityFromAmap(input.destination)
     if (online) {
-      const out = assemble(online, true, input, totalDays, pace, prefs)
+      const out = assemble(online, true, input, totalDays, pace, prefs, onStage)
       return out
     }
     // 在线抓取失败（断网/限流/地名检索质量差）：明确报错让用户重试。
@@ -141,7 +163,7 @@ export async function generateItineraryAsync(input: GenerateInput): Promise<Gene
   }
 
   const city = matchCity(input.destination)
-  return assemble(city, known, input, totalDays, pace, prefs)
+  return assemble(city, known, input, totalDays, pace, prefs, onStage)
 }
 
 /** 组装：选攻略/规则引擎排布 -> 生成天与行程项 -> 交代策略 */
@@ -151,8 +173,10 @@ function assemble(
   input: GenerateInput,
   totalDays: number,
   pace: { start: string; perDay: number },
-  prefs: string[]
+  prefs: string[],
+  onStage?: GenStageSink
 ): GenerateOutput {
+  onStage?.('score', { count: city.pois.length })
   const days: Day[] = []
   for (let i = 0; i < totalDays; i += 1) {
     days.push({
@@ -167,6 +191,7 @@ function assemble(
 
   // ---- 经典路线优先：命中攻略库则按真人玩法排布 ----
   const guide = getGuide(city.name)
+  onStage?.('plan', { days: totalDays })
   const plan: PoiSeed[][] = guide
     ? guidePlan(city, guide, totalDays, pace)
     : ruleEnginePlan(city, totalDays, pace, prefs)
@@ -190,6 +215,7 @@ function assemble(
   // （曾用布尔参数 preserveOrder 控制要不要重排，两个调用方语义不同却共用一个
   //   布尔值正是当时 bug 的源头；修完两路都要求保留，参数与重排分支一并删除。）
   const items: ItineraryItem[] = itemsFromPlan(plan, days, city.name, pace)
+  onStage?.('timeline', { count: items.length })
 
   const summary = buildSummary(city.name, totalDays, input.pace, prefs, items, known, input.destination, guide)
   return { days, items, summary }

@@ -3,7 +3,7 @@ import { computed, onUnmounted, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { useTripStore } from '@/stores/trip'
 import { nav } from '@/utils/nav'
-import { PREF_OPTIONS, type PaceLevel } from '@/utils/itinerary'
+import { PREF_OPTIONS, type PaceLevel, type GenStage, type GenStageInfo } from '@/utils/itinerary'
 import { isKnownCity } from '@/data/poi'
 import AppNav from '@/components/AppNav.vue'
 import AppIcon from '@/components/AppIcon.vue'
@@ -18,11 +18,86 @@ const generating = ref(false)
 let alive = true
 onUnmounted(() => {
   alive = false
+  // 打字机也不许再走（否则卸载后还回头改 ref 打日志/渲染）
+  if (typeTimer) clearTimeout(typeTimer)
+  typeTimer = null
 })
 const result = ref('')
 const error = ref('')
-/** 在线城市的拉取提示（本地库城市为空） */
-const loadingTip = ref('')
+
+// ── 流式渐显（打字机）────────────────────────────────
+// 生成器的阶段播报进队列后逐字打出。两条硬规矩，都是项目里踩过的坑：
+//   · 用 setTimeout 逐字驱动，不用 rAF —— 页面在后台时 rAF 会被完全暂停
+//     （PosterCanvas.vue 的教训）；
+//   · 渐显一律纯 CSS animation，不用 <Transition>/JS 切类 —— 小程序端任何
+//     setData 重渲染都会把过渡类重置回 enter-from，元素直接隐身（AppSheet 的坑）。
+const streamLines = ref<string[]>([])
+const typing = ref('')
+/** 每拍吐 1 字，~60 字/秒：比真人手打快一点，看得出「在算」 */
+const TYPE_MS = 16
+const queue: string[] = []
+let typeTimer: ReturnType<typeof setTimeout> | null = null
+let drainResolve: (() => void) | null = null
+
+/** 播报入口：空闲就开写，忙就排队（丢行比乱帧便宜，排队不丢） */
+function streamLine(text: string) {
+  if (typeTimer || typing.value) {
+    queue.push(text)
+    return
+  }
+  typeFrom(text)
+}
+
+function typeFrom(text: string) {
+  typing.value = ''
+  let i = 0
+  const tick = () => {
+    i += 1
+    typing.value = text.slice(0, i)
+    if (i < text.length) {
+      typeTimer = setTimeout(tick, TYPE_MS)
+      return
+    }
+    typeTimer = null
+    streamLines.value.push(text)
+    typing.value = ''
+    const next = queue.shift()
+    if (next) typeFrom(next)
+    else {
+      const w = drainResolve
+      drainResolve = null
+      w?.()
+    }
+  }
+  tick()
+}
+
+/** 等队伍排空（生成结束时要等所有播报打完再亮「草稿已就绪」） */
+function drainStream(): Promise<void> {
+  if (!typeTimer && !typing.value && !queue.length) return Promise.resolve()
+  return new Promise<void>((resolve) => {
+    drainResolve = resolve
+  })
+}
+
+/** 阶段 → 文案：与生成器同步链上的锚点一一对应 */
+function onStage(stage: GenStage, info: GenStageInfo) {
+  const dest = trip.value?.destination || ''
+  switch (stage) {
+    case 'fetch':
+      streamLine(`正在拉取「${dest}」的实时点位，约 1-2 秒…`)
+      break
+    case 'score':
+      streamLine(`为 ${info.count ?? 0} 个候选点位打分排序`)
+      break
+    case 'plan':
+      streamLine(`按「${paces.find((p) => p.key === pace.value)?.label || '标准'}」节奏排出 ${info.days ?? 0} 天`)
+      break
+    case 'timeline':
+      streamLine(`${info.count ?? 0} 个安排铺上时间轴`)
+      break
+  }
+}
 
 const trip = computed(() => store.trips.find((t) => t.id === tripId.value) || null)
 const isKnownDest = computed(() => !!trip.value && isKnownCity(trip.value.destination))
@@ -54,11 +129,12 @@ async function run() {
   }
   generating.value = true
   error.value = ''
-  // 非库城市要实时问高德（1-2s，限流重试时更久），给用户明说在干嘛
-  loadingTip.value = isKnownDest.value ? '' : `正在拉取「${trip.value.destination}」的高德点位，约 1-2 秒…`
+  streamLines.value = []
+  queue.length = 0
   // 让 loading 状态先渲染出来，再跑（本地库同步完成；在线城市要等高德检索，约 1-2s）
   setTimeout(async () => {
     try {
+      // 阶段播报打进打字机队列；生成完等播报全部打完，再亮「就绪」并跳转
       const summary = await store.generateAsync(tripId.value, {
         destination: trip.value!.destination,
         startDate: trip.value!.startDate,
@@ -66,7 +142,8 @@ async function run() {
         peopleCount: store.membersOf(tripId.value).length,
         prefs: prefs.value,
         pace: pace.value
-      })
+      }, onStage)
+      await drainStream()
       result.value = summary
       // 用户若已手动返回，不再强制拉回行程页
       setTimeout(() => {
@@ -75,9 +152,10 @@ async function run() {
     } catch (e) {
       // 在线城市的失败带具体原因（限流/断网），比笼统的「生成失败」可行动
       error.value = (e as Error)?.message || '生成失败，换个偏好再试一次'
+      // 失败也要等打字机排空：停在半截字会像页面卡了
+      await drainStream()
     } finally {
       generating.value = false
-      loadingTip.value = ''
     }
   }, 120)
 }
@@ -166,7 +244,14 @@ async function run() {
         <p class="done-sub">{{ result }}</p>
       </div>
 
-      <p v-if="loadingTip && generating" class="loading-tip">{{ loadingTip }}</p>
+      <!-- 流式过程：生成器的阶段播报逐行逐字流出（纯 CSS 动画，见 script 注释） -->
+      <div v-if="streamLines.length || typing" class="stream">
+        <p v-for="(l, i) in streamLines" :key="i" class="gl-line">{{ l }}</p>
+        <p v-if="typing" class="gl-line typing">
+          {{ typing }}<text class="caret" />
+        </p>
+      </div>
+
       <p v-if="error" class="err">{{ error }}</p>
     </div>
 
@@ -320,6 +405,8 @@ async function run() {
 .done {
   text-align: center;
   padding: 56px 20px;
+  /* 进场渐显：复用全局 rise keyframes —— 就绪卡片是流式过程的收尾一拍 */
+  animation: rise 0.35s ease-out both;
 }
 
 .done-icon {
@@ -352,11 +439,48 @@ async function run() {
   text-align: center;
 }
 
-.loading-tip {
+/* ── 流式渐显：阶段播报的打字机卡 ─────────────────────── */
+.stream {
   margin-top: 14px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.gl-line {
   font-size: 13px;
+  line-height: 1.6;
   color: var(--text-secondary);
-  text-align: center;
+}
+
+/* 正在打的那一行更深一点：视线的落点 */
+.gl-line.typing {
+  color: var(--text-primary);
+}
+
+/* 光标：纯 CSS 的 steps 闪烁（transition 类会被 setData 重置，keyframes 不会） */
+.caret {
+  display: inline-block;
+  width: 2px;
+  height: 13px;
+  margin-left: 2px;
+  vertical-align: -1px;
+  background: var(--brand-deep);
+  animation: caret-blink 0.7s steps(1, end) infinite;
+}
+
+@keyframes caret-blink {
+  0%,
+  55% {
+    opacity: 1;
+  }
+  56%,
+  100% {
+    opacity: 0;
+  }
 }
 
 .foot-bar {

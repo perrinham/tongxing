@@ -22,7 +22,7 @@ import { storageFor, emptySyncMeta } from '@/repository/storage'
 import { uid } from '@/utils/id'
 import { useCityStore } from '@/stores/city'
 import { addDays, daysBetween, todayISO, avatarColor } from '@/utils/format'
-import { generateItinerary, generateItineraryAsync, type GenerateInput, type GenerateOutput } from '@/utils/itinerary'
+import { generateItinerary, generateItineraryAsync, type GenerateInput, type GenerateOutput, type GenStageSink } from '@/utils/itinerary'
 import { buildPackingList } from '@/utils/packing'
 import { tallyOf, type PollTally } from '@/utils/poll'
 import { settle as runSettle } from '@/utils/settlement'
@@ -1038,10 +1038,14 @@ export const useTripStore = defineStore('trip', {
      * 不做静默回退 —— 旧版会兜底成成都的行程）。
      * 页面层统一走这个。
      */
-    async generateAsync(tripId: string, input: GenerateInput): Promise<string> {
+    async generateAsync(
+      tripId: string,
+      input: GenerateInput,
+      onStage?: GenStageSink
+    ): Promise<string> {
       const trip = this.trips.find((t) => t.id === tripId)
       if (!trip) return ''
-      const out = await generateItineraryAsync(input)
+      const out = await generateItineraryAsync(input, onStage)
       return this.applyGenerate(tripId, input, out)
     },
 

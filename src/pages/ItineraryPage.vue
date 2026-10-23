@@ -514,6 +514,7 @@ function goMap() {
             <div
               class="tl-row"
               :class="{ done: it.done }"
+              :style="{ animationDelay: Math.min(idx, 8) * 55 + 'ms' }"
               @click="openItem(it.id)"
             >
               <div class="tl-time-col">
@@ -1145,6 +1146,9 @@ function goMap() {
   gap: 10px;
   padding: 12px 16px;
   transition: background 0.12s ease;
+  /* 梯次渐显：从生成页跳过来的整批行程卡逐条 rise（全局 keyframes）。
+     纯 CSS：插入时自动播，之后 patch 不重播 —— 切天/打卡都不会闪。（AppSheet 的结论） */
+  animation: rise 0.3s var(--ease-out, ease-out) both;
 }
 
 .tl-row:active {
