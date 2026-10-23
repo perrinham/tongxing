@@ -348,6 +348,12 @@ function goGenerate() {
   nav.to('trip-generate', { tripId: trip.value.id })
 }
 
+/** 行程回放（带坐标 item ≥1 即可进，页面内自己空态兜底） */
+function goReplay() {
+  if (!trip.value) return
+  nav.to('replay', { id: trip.value.id })
+}
+
 function goMap() {
   if (!activeDay.value) return
   nav.to('map', { dayId: activeDay.value.id })
@@ -425,6 +431,14 @@ function goMap() {
             <span class="grow" />
             <span v-if="meetup" class="row-value meetup-val ellipsis">{{ meetup.title }}</span>
             <span v-else class="row-value">未定</span>
+            <AppIcon name="right" :size="15" color="var(--text-tertiary)" />
+          </button>
+          <div class="list-sep" />
+          <button class="list-row" @click="goReplay">
+            <AppIcon name="location" :size="18" color="var(--text-secondary)" />
+            <span class="pad">行程回放</span>
+            <span class="grow" />
+            <span class="row-value">按天画线 · 分享海报</span>
             <AppIcon name="right" :size="15" color="var(--text-tertiary)" />
           </button>
           <div class="list-sep" />
