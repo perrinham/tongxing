@@ -15,6 +15,7 @@
     { "path": "pages/ProfilePage", "style": { "navigationStyle": "custom" } },
     { "path": "pages/MapPage", "style": { "navigationStyle": "custom" } },
     { "path": "pages/CityMapPage", "style": { "navigationStyle": "custom" } },
+    { "path": "pages/ReplayPage", "style": { "navigationStyle": "custom" } },
     { "path": "pages/MyGuidesPage", "style": { "navigationStyle": "custom" } },
     { "path": "pages/SyncPage", "style": { "navigationStyle": "custom" } },
     { "path": "pages/DiscoverPage", "style": { "navigationStyle": "custom" } },

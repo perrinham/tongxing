@@ -18,6 +18,7 @@ export const ROUTES: Record<string, string> = {
   meetup: '/pages/MeetupPage',
   map: '/pages/MapPage',
   'city-map': '/pages/CityMapPage',
+  replay: '/pages/ReplayPage',
   'my-guides': '/pages/MyGuidesPage',
   sync: '/pages/SyncPage',
   discover: '/pages/DiscoverPage',

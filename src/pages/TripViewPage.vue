@@ -59,6 +59,12 @@ function goEdit() {
   nav.replace('itinerary')
 }
 
+/** 行程回放：只读浏览也能放（走 getSpace，不要求本地有这份行程） */
+function goReplay() {
+  if (!space.value) return
+  nav.to('replay', { id: space.value.id })
+}
+
 // ── 只读页的核验摘要：纯零成本规则收尾（不注入 route，绝不因浏览而出网）──
 const issues = ref<ItinIssue[]>([])
 const badIds = ref<Set<string>>(new Set())
@@ -134,6 +140,10 @@ onLoad(async (options: Record<string, any> | undefined) => {
           </p>
         </div>
 
+        <button class="replay-btn" @click="goReplay">
+          <AppIcon name="location" :size="16" />
+          行程回放
+        </button>
         <button v-if="editable" class="edit-btn" @click="goEdit">
           <AppIcon name="map" :size="16" />
           进入编辑
@@ -295,6 +305,22 @@ onLoad(async (options: Record<string, any> | undefined) => {
   font-weight: 600;
   color: #ffffff;
   background: var(--brand-deep);
+  border-radius: 14px;
+}
+
+/* 行程回放入口（浅色次钮，显式 flex 居中同口径） */
+.replay-btn {
+  margin-top: 12px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--brand-deep);
+  background: var(--brand-soft);
   border-radius: 14px;
 }
 

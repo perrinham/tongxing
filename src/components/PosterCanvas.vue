@@ -1,8 +1,20 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, getCurrentInstance, onUnmounted } from 'vue'
 import { drawPoster, posterHeight, posterWidth, type PosterData } from '@/utils/poster'
+import type { ReplayPosterData } from '@/utils/replay'
 
-const props = defineProps<{ data: PosterData | null }>()
+/**
+ * 泛化的海报画布：默认画结算海报（utils/poster）；
+ * 传入 draw/heightOf 就换成别的海报（行程回放 = utils/replay），复用全套
+ * 画布就绪/双端语义/导出保存管道 —— 但绘制样式本身各写各的。
+ */
+const props = defineProps<{
+  data: PosterData | ReplayPosterData | null
+  /** 自定义画笔 (ctx, cssW, H, data)；缺省 = 结算海报的 drawPoster */
+  draw?: (ctx: CanvasRenderingContext2D | any, cssW: number, H: number, data: any) => void
+  /** 自定义测高 (data) => H；缺省 = 结算海报的 posterHeight */
+  heightOf?: (data: any) => number
+}>()
 const emit = defineEmits<{ (e: 'saved', text?: string): void; (e: 'error', msg: string): void }>()
 
 const canvasId = 'posterCanvas'
@@ -73,14 +85,15 @@ function realDomCanvas(): HTMLCanvasElement | null {
  * 用 `setTransform`（绝对赋值）而不是 `scale` —— `scale` 是**累乘**的，
  * 一旦某次尺寸赋值没生效，变换矩阵不会被重置，反复渲染就会越缩越小。
  */
-function paint(ctx: any, sx: number, sy: number, H: number, data: PosterData) {
+function paint(ctx: any, sx: number, sy: number, H: number, data: any) {
+  const paintFn = props.draw || drawPoster
   if (typeof ctx.setTransform === 'function') {
     ctx.setTransform(sx, 0, 0, sy, 0, 0)
   } else {
     if (typeof ctx.resetTransform === 'function') ctx.resetTransform()
     ctx.scale(sx, sy)
   }
-  drawPoster(ctx, cssW, H, data)
+  paintFn(ctx, cssW, H, data)
 }
 
 /**
@@ -88,7 +101,7 @@ function paint(ctx: any, sx: number, sy: number, H: number, data: PosterData) {
  * `type="2d"` 拿到的就是真画布对象，宽高完全由我们控制：设成 逻辑尺寸 × dpr，
  * 再按同样的比例设变换，导出时是全分辨率。官方用法，没有额外干扰。
  */
-function renderMp(H: number, data: PosterData, attempt: number) {
+function renderMp(H: number, data: any, attempt: number) {
   scopedQuery()
     .select('#' + canvasId)
     .fields({ node: true, size: true })
@@ -140,7 +153,7 @@ function renderMp(H: number, data: PosterData, attempt: number) {
  *   ④ 下一拍再验一次尺寸，若 ResizeSensor 又动过，按新尺寸重画一遍。
  * 全程**不写** canvas.width/height —— 在 H5 上那是 uni 的地盘。
  */
-function renderH5(H: number, data: PosterData, attempt: number) {
+function renderH5(H: number, data: any, attempt: number) {
   const canvas = realDomCanvas()
   const root = rootEl()
   const avail = root ? root.clientWidth : 0
@@ -198,7 +211,7 @@ function render(attempt = 0) {
     clearTimer()
   }
   const data = props.data
-  const H = posterHeight(data)
+  const H = (props.heightOf || ((d: any) => posterHeight(d as PosterData)))(data)
   displayH.value = Math.round((H * displayW.value) / cssW)
 
   nextTick(() => {
@@ -216,9 +229,9 @@ function render(attempt = 0) {
  * 于是这里按逻辑尺寸离屏重绘一份 2 倍图再下载。
  * 离屏 canvas 的上下文没有 `__hidpi__` 标记，不会吃到 uni 的坐标缩放。
  */
-function downloadH5(data: PosterData) {
+function downloadH5(data: any) {
   if (!isH5) return
-  const H = posterHeight(data)
+  const H = (props.heightOf || ((d: any) => posterHeight(d as PosterData)))(data)
   const off = document.createElement('canvas')
   const R = 2
   off.width = cssW * R
@@ -229,7 +242,7 @@ function downloadH5(data: PosterData) {
     return
   }
   octx.setTransform(R, 0, 0, R, 0, 0)
-  drawPoster(octx, cssW, H, data)
+  ;(props.draw || drawPoster)(octx, cssW, H, data)
   off.toBlob((blob) => {
     if (!blob) {
       emit('error', '生成图片失败')
@@ -238,7 +251,7 @@ function downloadH5(data: PosterData) {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `结算海报-${data.destination || data.title || '行程'}.png`
+    a.download = `${props.draw ? '行程海报' : '结算海报'}-${data.destination || data.title || '行程'}.png`
     a.click()
     setTimeout(() => URL.revokeObjectURL(url), 4000)
     emit('saved', '海报已下载')
@@ -267,7 +280,7 @@ function save() {
       uni.canvasToTempFilePath({
         canvas: info.node,
         destWidth: cssW * 2,
-        destHeight: posterHeight(data) * 2,
+        destHeight: (props.heightOf || ((d: any) => posterHeight(d as PosterData)))(data) * 2,
         success: (r: any) => {
           uni.saveImageToPhotosAlbum({
             filePath: r.tempFilePath,
