@@ -1248,6 +1248,36 @@ export const useTripStore = defineStore('trip', {
       this.commit(tripId)
     },
 
+    // ---------- 避雷清单 ----------
+    //
+    // 与行李清单同为「单字段整块 LWW」：avoid?: AvoidItem[]（裸数组，无外壳）。
+    // 没有勾选语义 —— 雷不是待办，记下就是结论；没有自动生成 —— 坑是这座城
+    // 具体大小、哪些口子会咬人，规则表不可能知道，只有走过的人知道。
+
+    /** 署名取添加当时的成员名（成员改名不改历史署名，像账单的 payer 一样） */
+    addAvoid(tripId: string, title: string) {
+      const trip = this.trips.find((t) => t.id === tripId)
+      if (!trip || !title.trim()) return
+      // 上限 40 与服务端裁剪孪生一致；超限就不加了
+      if ((trip.avoid?.length || 0) >= 40) return
+      const self = this.membersOf(tripId).find((m) => m.isSelf)
+      trip.avoid = [
+        ...(trip.avoid || []),
+        { title: title.trim().slice(0, 40), who: self?.name || '' }
+      ]
+      this.stampFields([trip], ['avoid'])
+      this.commit(tripId)
+    },
+
+    removeAvoid(tripId: string, index: number) {
+      const trip = this.trips.find((t) => t.id === tripId)
+      if (!trip || !trip.avoid?.[index]) return
+      trip.avoid = trip.avoid.filter((_, i) => i !== index)
+      if (!trip.avoid.length) delete trip.avoid // 清空即整个字段摘掉
+      this.stampFields([trip], ['avoid'])
+      this.commit(tripId)
+    },
+
     // ---------- 记账 ----------
 
     addExpense(input: Omit<Expense, 'id' | 'createdAt'>): Expense {

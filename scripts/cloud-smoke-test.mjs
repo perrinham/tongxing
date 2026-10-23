@@ -338,6 +338,53 @@ console.log('· trips 行李清单')
   )
   ok(!isErr(stale), '旧快照 push 成功')
   eq(stale.doc?.trip?.packing?.items?.length, 40, '旧快照无 packing 字段 → 不抹掉清单（fhlc 比字段）')
+
+  // ── 避雷清单（trip.avoid）：裁剪 + 往返 + 旧快照不互相抹（与 server 孪生同款）──
+  {
+    const avTp = Date.now()
+    const pushedAv = await call(
+      trips,
+      {
+        action: 'push',
+        id: 'sp-pk',
+        author: '小明',
+        deviceId: 'dev-pk',
+        baseRev: null,
+        doc: tripDoc({
+          updatedAt: avTp,
+          avoid: [
+            ...Array.from({ length: 41 }, (_, i) => ({ title: `雷${i + 1}`, who: `记${i + 1}` })),
+            { title: '' },
+            { title: '垃圾条', junk: 1 }
+          ]
+        }),
+        tombstones: [],
+        loggedIn: true
+      },
+      'openid-A'
+    )
+    ok(!isErr(pushedAv), 'avoid 随 doc 入云成功')
+    eq(pushedAv.doc?.trip?.avoid?.length, 40, '云裁剪：44 → 40')
+    ok(pushedAv.doc?.trip?.avoid?.every((x) => !!x.title && !('junk' in x)), '空标题丢弃、垃圾键剥掉')
+    eq(pushedAv.doc?.trip?.avoid?.[0]?.title, '雷1', '首条保序')
+
+    const staleAv = await call(
+      trips,
+      {
+        action: 'push',
+        id: 'sp-pk',
+        author: '阿花',
+        deviceId: 'dev-pk-2',
+        baseRev: null,
+        doc: tripDoc({ updatedAt: avTp - 1_000 }),
+        tombstones: [],
+        loggedIn: true
+      },
+      'openid-B'
+    )
+    ok(!isErr(staleAv), '旧快照 push 成功')
+    eq(staleAv.doc?.trip?.avoid?.length, 40, '旧快照无 avoid 字段 → 不抹掉避雷清单')
+  }
 }
 
 // ───────────────────────── trips：认领 ─────────────────────────

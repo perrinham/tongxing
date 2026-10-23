@@ -152,6 +152,11 @@ function normTrip(raw, spaceId) {
     const p = normPacking(raw.packing)
     if (p) t.packing = p
   }
+  // 避雷清单：同样整块 LWW（见 normAvoid）
+  if (raw.avoid !== undefined) {
+    const a = normAvoid(raw.avoid)
+    if (a) t.avoid = a
+  }
   return withFhlc(t, raw)
 }
 
@@ -172,6 +177,24 @@ function normPacking(raw) {
     items.push({ title, group: str(r.group, 8) || '其他', done: bool(r.done) })
   }
   return { builtAt: ts(raw.builtAt, Date.now()), items }
+}
+
+/**
+ * 避雷清单裁剪（孪生函数：server/routes/trips.mjs ↔ cloudfunctions/trips/index.js，
+ * 改一处必改另一处）。上限 40 条、title ≤40、who ≤12，空标题直接丢，额外键剥掉；
+ * 与 packing 同为整块字段级 LWW —— 同行人低频各加各的，不建独立实体。
+ */
+function normAvoid(raw) {
+  if (!Array.isArray(raw)) return null
+  const items = []
+  for (let i = 0; i < raw.length && items.length < 40; i++) {
+    const r = raw[i]
+    if (!isPlainObject(r)) continue
+    const title = str(r.title, 40)
+    if (!title) continue
+    items.push({ title, who: str(r.who, 12) })
+  }
+  return items
 }
 
 function normMember(raw, tripId) {

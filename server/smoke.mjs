@@ -587,6 +587,38 @@ try {
       doc: mkDoc({ trip: { ...mkDoc({}).trip, updatedAt: tp - 1 } })
     })
     ok(sPR.data.doc.trip.packing.items.length === 40, '旧快照无 packing 字段 → 不抹掉清单（fhlc 比字段）')
+
+    // ── 避雷清单（trip.avoid）：裁剪 + 往返 + 旧快照不互相抹 ──
+    {
+      // 41 个合法项混 1 个空标题项和 1 个垃圾键项 → 裁 40、丢空、剥键
+      const bads = [{ title: `第${42}条`, who: '阿花' }, { title: '' }, { title: '垃圾条', junk: 1 }]
+      const tA = Date.now()
+      const sAv = await M('POST', `/api/trips/${T}`, {
+        author: '阿哲',
+        doc: mkDoc({
+          trip: {
+            ...mkDoc({}).trip,
+            updatedAt: tA,
+            avoid: [
+              ...Array.from({ length: 41 }, (_, i) => ({ title: `雷${i + 1}`, who: `记${i + 1}` })),
+              ...bads
+            ]
+          }
+        })
+      })
+      const av = sAv.data.doc.trip.avoid
+      ok(Array.isArray(av) && av.length === 40, 'avoid 裁到 40 上限（44 → 40）', av?.length)
+      ok(av.every((x) => !!x.title && !('junk' in x)), '空标题丢弃、垃圾键剥掉')
+      ok(av[0].title === '雷1' && av[0].who === '记1', '首条保序保真', av[0])
+      ok(!('updatedAt' in av[0]) && Object.keys(av[0]).length === 2, '额外字段一律不存在', Object.keys(av[0]))
+
+      // 没有 avoid 的旧快照推回来不清坑（字段级合并，同 packing 的口径）
+      const sAvR = await M('POST', `/api/trips/${T}`, {
+        author: 'Yuki',
+        doc: mkDoc({ trip: { ...mkDoc({}).trip, updatedAt: tA - 1 } })
+      })
+      ok(sAvR.data.doc.trip.avoid.length === 40, '旧快照无 avoid 字段 → 不抹掉避雷清单')
+    }
   }
 
   // 离线只推墓碑（doc: null）

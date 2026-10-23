@@ -255,6 +255,23 @@ function addPackItem() {
   newItemText.value = ''
 }
 
+// ── 避雷清单：avoid 是同行人共同记的坑，谁加的署谁的名 ──
+const showAvoid = ref(false)
+const newAvoidText = ref('')
+
+const avoid = computed(() => trip.value?.avoid || null)
+
+function removeAvoid(index: number) {
+  if (trip.value) store.removeAvoid(trip.value.id, index)
+}
+
+function addAvoidItem() {
+  const title = newAvoidText.value.trim()
+  if (!trip.value || !title) return
+  store.addAvoid(trip.value.id, title)
+  newAvoidText.value = ''
+}
+
 
 function goPolls() {
   if (trip.value) nav.to('poll', { id: trip.value.id })
@@ -427,6 +444,15 @@ function goMap() {
             <span class="grow" />
             <span v-if="packTotal" class="vflag okv">{{ packDone }}/{{ packTotal }}</span>
             <span v-else class="vflag warn">待生成</span>
+            <AppIcon name="right" :size="15" color="var(--text-tertiary)" />
+          </button>
+          <div class="list-sep" />
+          <button class="list-row" @click="showAvoid = true">
+            <AppIcon name="warn" :size="18" color="var(--text-secondary)" />
+            <span class="pad">避雷清单</span>
+            <span class="grow" />
+            <span v-if="avoid?.length" class="vflag warn">{{ avoid.length }} 条坑</span>
+            <span v-else class="vflag plain">还没记</span>
             <AppIcon name="right" :size="15" color="var(--text-tertiary)" />
           </button>
           <div class="list-sep" />
@@ -632,6 +658,35 @@ function goMap() {
       </div>
     </AppSheet>
 
+    <!-- 避雷清单面板：同行人共同记，谁加的署谁的名；没有勾选也没有重造 -->
+    <AppSheet v-model="showAvoid" title="避雷清单">
+      <div v-if="avoid?.length" class="pack-list">
+        <div v-for="(a, i) in avoid" :key="i" class="pack-row avoid-row">
+          <AppIcon name="warn" :size="15" color="var(--warn)" />
+          <span class="pack-title avoid-title">
+            {{ a.title }}
+            <text v-if="a.who" class="avoid-who">· {{ a.who }}</text>
+          </span>
+          <button class="pack-x" @click="removeAvoid(i)">删</button>
+        </div>
+      </div>
+      <p v-else class="avoid-empty">
+        同行人各记各的：贵重物贴身、查票口子、五点关门、宰客名店…谁踩过谁记，后面的人不重踩。
+      </p>
+
+      <div class="pack-add">
+        <input
+          v-model="newAvoidText"
+          class="pack-input"
+          placeholder="这座城的哪条坑？一句话记下"
+          maxlength="40"
+          confirm-type="done"
+          @confirm="addAvoidItem"
+        />
+        <button class="pack-add-btn" :disabled="!newAvoidText.trim()" @click="addAvoidItem">记下</button>
+      </div>
+    </AppSheet>
+
     <AppSheet v-model="showActions" :title="activeItem?.title || ''">
       <div class="acts">
         <button class="act" @click="toggleDone">
@@ -687,6 +742,12 @@ function goMap() {
 .vflag.okv {
   color: var(--brand-deep);
   background: var(--brand-soft);
+}
+
+/* 中性徽标：存在但无待办语义（如「还没记」） */
+.vflag.plain {
+  color: var(--text-secondary);
+  background: var(--bg-subtle);
 }
 
 .tl-vchip {
@@ -835,6 +896,32 @@ function goMap() {
 .pack-row.done .pack-title {
   color: var(--text-tertiary);
   text-decoration: line-through;
+}
+
+/* ── 避雷清单（复用 pack-row/pack-list/pack-add 骨架）───────── */
+.avoid-row {
+  height: 44px;
+}
+
+/* 标题 + 署名同行排；署名是弱信息 */
+.avoid-title {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.avoid-who {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.avoid-empty {
+  padding: 4px 4px 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
 .pack-check {

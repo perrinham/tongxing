@@ -14,6 +14,15 @@ export interface PackingList {
   items: PackingItem[]
 }
 
+/**
+ * 避雷清单的单条：**没有** done 勾选（雷不是待办，记下就是结论），
+ * who 是添加成员当时的名字——同行人共同记，谁记的署谁的名。
+ */
+export interface AvoidItem {
+  title: string
+  who: string
+}
+
 export interface Trip {
   id: string
   title: string
@@ -33,6 +42,12 @@ export interface Trip {
    * 整块粒度够用；服务端/云函数的 normTrip 各有一份同款裁剪孪生（40 项上限）。
    */
   packing?: PackingList
+  /**
+   * 避雷清单（裸数组，无外壳——雷不重造，所以没有 like packing 的 builtAt）。
+   * 整块参与字段级 LWW，同行人低频各加各的条目；服务端/云函数的 normTrip
+   * 各有一份同款裁剪孪生（40 条上限、title≤40、who≤12）。
+   */
+  avoid?: AvoidItem[]
   /**
    * 最后修改时间。云端同步靠它做 last-write-wins 比较，
    * 因此**任何改动都必须刷新这个字段**（见 stores/trip.ts 的 touch）。
