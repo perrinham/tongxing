@@ -6,6 +6,7 @@ import { availableCities } from '@/utils/itinerary'
 import { isKnownCity } from '@/data/poi'
 import { inputTips, resolveCityName, type AmapPoi } from '@/services/amap'
 import { addDays, daysBetween, todayISO } from '@/utils/format'
+import { budgetBrief, estimateBudget } from '@/utils/budget'
 import AppNav from '@/components/AppNav.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import AppAvatar from '@/components/AppAvatar.vue'
@@ -31,6 +32,24 @@ let tipTimer: ReturnType<typeof setTimeout> | null = null
 const dayCount = computed(() => daysBetween(startDate.value, endDate.value))
 const canSubmit = computed(() => destination.value.trim().length > 0 && dayCount.value > 0)
 const isKnownDest = computed(() => isKnownCity(destination.value))
+
+/** 预算智能参考：目的地 + 实际天数 + 实际人数，随表单实时变（可一键填进预算框） */
+const budgetEst = computed(() =>
+  destination.value.trim() && dayCount.value > 0
+    ? estimateBudget({
+        destination: destination.value,
+        days: dayCount.value,
+        peopleCount: memberNames.value.filter((n) => n.trim()).length || 1
+      })
+    : null
+)
+const budgetEstHint = computed(() => (budgetEst.value ? budgetBrief(budgetEst.value) : ''))
+
+function useEstimate() {
+  if (!budgetEst.value) return
+  budget.value = budgetEst.value.perPerson
+  budgetText.value = String(budgetEst.value.perPerson)
+}
 
 function onDestInput(e: Event) {
   const value = (e.target as HTMLInputElement).value
@@ -195,6 +214,10 @@ function submit() {
               @input="onBudget"
             />
           </div>
+          <div v-if="budgetEstHint" class="est-row">
+            <p class="tip est-hint">参考：{{ budgetEstHint }}</p>
+            <button class="btn-text est-use" @click="useEstimate">填入</button>
+          </div>
         </div>
       </div>
 
@@ -322,6 +345,33 @@ function submit() {
 
 .prefix-input {
   gap: 6px;
+}
+
+/* 预算智能参考行：左文案 + 右「填入」钮（btn-text 基类已居中，不重设居中） */
+.est-row {
+  display: flex;
+  align-items: center;
+  margin-top: 6px;
+}
+
+.est-hint {
+  flex: 1;
+  min-width: 0;
+}
+
+.est-use {
+  /* 按钮居中口径：显式 flex，不赌 btn-text 基类 */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: 8px;
+  padding: 4px 10px;
+  border-radius: 12px;
+  background: var(--brand-soft);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand-deep);
 }
 
 .prefix {

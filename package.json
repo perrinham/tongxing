@@ -42,9 +42,10 @@
     "cloud:setup": "node scripts/cloud-setup.mjs",
     "cloud:verify": "node scripts/cloud-setup.mjs --verify",
     "migrate:export": "node scripts/migrate-export.mjs",
-    "test": "npm run server:smoke && npm run client:smoke && npm run city:smoke && npm run itin:smoke && npm run plan:smoke && npm run genstage:smoke && npm run expr:smoke && npm run packing:smoke && npm run fx:smoke && npm run lib:parity && npm run cloud:smoke && npm run amap:smoke",
+    "test": "npm run server:smoke && npm run client:smoke && npm run city:smoke && npm run itin:smoke && npm run plan:smoke && npm run budget:smoke && npm run genstage:smoke && npm run expr:smoke && npm run packing:smoke && npm run fx:smoke && npm run lib:parity && npm run cloud:smoke && npm run amap:smoke",
     "verify": "node node_modules/vue-tsc/bin/vue-tsc.js --noEmit && node scripts/check-token-sync.mjs && node scripts/check-contrast.mjs && node scripts/check-palette.mjs && node scripts/check-platform.mjs && npm run build:mp-weixin && node scripts/lint-wxss.mjs && npm run lib:parity && npm run cloud:smoke && node scripts/city-smoke-test.mjs",
-    "plan:smoke": "node scripts/plan-quality-test.mjs"
+    "plan:smoke": "node scripts/plan-quality-test.mjs",
+    "budget:smoke": "node scripts/budget-test.mjs"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-5020420260813003",
