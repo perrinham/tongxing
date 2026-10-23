@@ -12,6 +12,8 @@ const store = useTripStore()
 
 const itemId = ref('')
 const title = ref('')
+import { evalAmountExpr } from '@/utils/amountExpr'
+
 const time = ref('10:00')
 const type = ref<ItemType>('spot')
 const address = ref('')
@@ -23,12 +25,15 @@ const done = ref(false)
 const item = computed(() => store.items.find((i) => i.id === itemId.value))
 const trip = computed(() => store.activeTrip)
 
+/** 每人花费支持直接输算式（68+35×2）：解析失败/未写完 → 0，clamp 与旧逻辑一致 */
 const cost = computed(() => {
-  const v = Number(costText.value)
-  if (!Number.isFinite(v)) return 0
-  // 负数 / Infinity / 超长粘贴会污染预估价与花费汇总：夹到 [0, 1e7]
+  const v = evalAmountExpr(costText.value)
+  if (v === null) return 0
+  // 负数 / 超长粘贴会污染预估价与花费汇总：夹到 [0, 1e7]
   return Math.min(Math.max(v, 0), 10_000_000)
 })
+
+const costIsExpr = computed(() => /[+×÷*/x-]/.test(costText.value))
 const duration = computed(() => Number(durationText.value) || 90)
 
 const end = computed(() => endTime(time.value, duration.value))
@@ -189,7 +194,10 @@ const durationOptions = [30, 45, 60, 90, 120, 180, 240, 300]
             />
           </span>
         </div>
-        <p v-if="cost > 0" class="cost-hint">
+        <p v-if="cost > 0 && costIsExpr" class="cost-hint">
+          算式 = {{ moneyBrief(cost) }} · {{ peopleCount }} 人共 {{ moneyBrief(totalCost) }}，会算进行程预估价
+        </p>
+        <p v-else-if="cost > 0" class="cost-hint">
           {{ peopleCount }} 人共 {{ moneyBrief(totalCost) }}，会算进行程预估价
         </p>
       </div>

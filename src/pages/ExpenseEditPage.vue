@@ -5,6 +5,7 @@ import { useTripStore } from '@/stores/trip'
 import { nav } from '@/utils/nav'
 import { CATEGORY_META, CATEGORY_ORDER, categoryMetaOf, money, todayISO } from '@/utils/format'
 import { splitAmount } from '@/utils/settlement'
+import { evalAmountExpr } from '@/utils/amountExpr'
 import type { ExpenseCategory, SplitMode } from '@/types'
 import AppNav from '@/components/AppNav.vue'
 import AppIcon from '@/components/AppIcon.vue'
@@ -40,9 +41,16 @@ const weights = ref<Record<string, number>>({})
 /** 自定义模式：memberId -> 金额文本 */
 const customAmounts = ref<Record<string, string>>({})
 
-const amount = computed(() => {
-  const v = Number(amountText.value)
-  return Number.isFinite(v) ? v : 0
+/**
+ * 金额求值：amountText 现在可以是算式（68+35×2），统一走 amountExpr 解析。
+ * 非法/未写完的算式 → null → 0 → canSave 自动关闭，分享预览等下游无感。
+ */
+const amount = computed(() => evalAmountExpr(amountText.value) ?? 0)
+
+/** 输入的是不是算式（含运算符）：是的话金额区右侧给出实时结果预览 */
+const exprEq = computed(() => {
+  const hasOp = /[+×÷-]/.test(amountText.value)
+  return hasOp && amount.value > 0 ? amount.value : null
 })
 
 const canSave = computed(
@@ -110,7 +118,12 @@ const sharePreview = computed(() => {
   return out
 })
 
-const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '.', '0', 'del']
+/**
+ * 4×4 键盘：数字照旧，右列四格换成运算符与退格 —— 原 3×4 的 12 个键
+ * 加上 + - × ÷ 恰好铺满，行数不变所以页面底部留白不用重算。
+ * 小数点是「每段一个」（68+35.5 合法、68+.5.. 不可能被敲出来）。
+ */
+const keys = ['7', '8', '9', 'del', '4', '5', '6', '÷', '1', '2', '3', '×', '+', '0', '.', '-']
 
 onLoad((options: Record<string, any> | undefined) => {
   if (!trip.value) {
@@ -149,25 +162,45 @@ onLoad((options: Record<string, any> | undefined) => {
   }
 })
 
+const OPS = ['+', '-', '×', '÷']
+
+/** 从文本尾部找当前操作数段的起点（运算符之后） */
+function segStart(t: string): number {
+  for (let i = t.length - 1; i >= 0; i--) {
+    if (OPS.includes(t[i])) return i + 1
+  }
+  return 0
+}
+
 function press(k: string) {
+  const t = amountText.value
   if (k === 'del') {
-    amountText.value = amountText.value.slice(0, -1)
+    amountText.value = t.slice(0, -1)
     return
   }
+  const start = segStart(t)
+  const seg = t.slice(start)
   if (k === '.') {
-    if (amountText.value.includes('.')) return
-    if (!amountText.value) amountText.value = '0'
-    amountText.value += '.'
+    if (seg.includes('.')) return
+    // 段空（开头/刚敲完运算符）补个 0，避免出现「68+.」这种段
+    amountText.value = seg ? t + '.' : t + '0.'
     return
   }
-  if (amountText.value.includes('.')) {
-    const dec = amountText.value.split('.')[1] || ''
-    if (dec.length >= 2) return
+  if (OPS.includes(k)) {
+    // 运算符不能开头、不能连按（简单拒绝而非替换，删一格比猜用户意图便宜）
+    if (!t || OPS.includes(t[t.length - 1])) return
+    amountText.value = t + k
+    return
   }
-  // 去掉前导零
-  if (amountText.value === '0') amountText.value = k
-  else amountText.value += k
-  if (amountText.value.length > 9) amountText.value = amountText.value.slice(0, 9)
+  // 数字：段内前导零直接顶掉（'0' 后敲 '5' 得 '5'，而不是 '05'）
+  if (seg === '0') {
+    amountText.value = t.slice(0, start) + k
+    return
+  }
+  const dot = seg.indexOf('.')
+  if (dot >= 0 && seg.length - dot - 1 >= 2) return // 每段最多两位小数
+  if (t.length >= 14) return
+  amountText.value = t + k
 }
 
 function toggleParticipant(id: string) {
@@ -277,9 +310,17 @@ const quickAmounts = [50, 100, 200, 500]
     <div class="amount-block">
       <div class="amount-row">
         <span class="cur">¥</span>
-        <span class="amount num" :class="{ placeholder: !amountText }">
+        <span
+          class="amount num"
+          :class="{
+            placeholder: !amountText,
+            shrink: amountText.length >= 9,
+            'shrink-more': amountText.length >= 13
+          }"
+        >
           {{ amountText || '0' }}
         </span>
+        <span v-if="exprEq !== null" class="expr-eq num">= {{ money(exprEq, currency) }}</span>
       </div>
       <div class="quick">
         <button v-for="q in quickAmounts" :key="q" class="q-btn" @click="amountText = String(q)">
@@ -471,14 +512,14 @@ const quickAmounts = [50, 100, 200, 500]
       </div>
     </div>
 
-    <!-- 键盘：左侧 3 列数字，右侧保存键贯穿 -->
+    <!-- 键盘：左 4 列数字+运算符，右侧保存键贯穿 -->
     <div class="keypad">
       <div class="keys">
         <button
           v-for="k in keys"
           :key="k"
           class="key"
-          :class="{ del: k === 'del' }"
+          :class="{ del: k === 'del', op: OPS.includes(k) }"
           @click="press(k)"
         >
           <AppIcon v-if="k === 'del'" name="left" :size="20" />
@@ -539,6 +580,23 @@ const quickAmounts = [50, 100, 200, 500]
 .amount.placeholder {
   color: var(--text-tertiary);
   font-weight: 600;
+}
+
+/* 算式比纯数字长：分两档缩字号，避免把行撑出屏（触发阈值就跳一档，不算抖动） */
+.amount.shrink {
+  font-size: 30px;
+}
+
+.amount.shrink-more {
+  font-size: 24px;
+}
+
+/* 表达式的实时结果：小一号、推到行尾，基线对齐主金额 */
+.expr-eq {
+  margin-left: auto;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-secondary);
 }
 
 .quick {
@@ -876,11 +934,11 @@ const quickAmounts = [50, 100, 200, 500]
   gap: 1px;
 }
 
-/* 左：3 列 × 4 行数字键 */
+/* 左：4 列 × 4 行（数字 + 运算符，见 keys 注释） */
 .keys {
   flex: 1;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   grid-auto-rows: 56px;
   gap: 1px;
   background: var(--line);
@@ -902,6 +960,11 @@ const quickAmounts = [50, 100, 200, 500]
 }
 
 .key.del {
+  color: var(--text-secondary);
+}
+
+/* 运算符用副色：让数字仍是视觉主体，与退格一致 */
+.key.op {
   color: var(--text-secondary);
 }
 
