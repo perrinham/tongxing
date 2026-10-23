@@ -12,6 +12,10 @@ import { CATEGORY_ORDER } from './format'
 const toCent = (v: number) => Math.round((Number.isFinite(v) ? v : 0) * 100)
 const toYuan = (c: number) => c / 100
 
+/** 超过这个人数就不做零和子集 DP（3^n），直接贪心链 */
+const MAX_DP_MEMBERS = 14
+const pickMask = new Int32Array(1 << MAX_DP_MEMBERS)
+
 /**
  * 计算一笔账里每个参与者的应付份额（单位：分）
  * 三种模式：均分 / 按权重 / 自定义金额
@@ -128,13 +132,95 @@ export function computeBalances(members: Member[], expenses: Expense[]): NetBala
  * 贪心配对：把任意债务图压缩到最少转账笔数
  * 每轮让「最大债主」收「最大欠债人」的钱，抵消较小的一方
  */
+/**
+ * 最少转账：把净额之间的欠款收敛到最少的转账笔数。
+ *
+ * 之前是纯贪心（双方各排序后顺次对冲），贪心的转账数可能不是最少——
+ * 例：净额 [+998, +709, −540, −709, +122, −580]（分）贪心要 5 笔，
+ * 但按零和子集拆成 {998, −540, −580, +122} 与 {709, −709} 两组只要 4 笔。
+ * 这是 Splitwise「债务简化」的经典问题：转账下限 = 非零人数 − 最多可拆出的
+ * 互斥零和子集数。
+ *
+ * 实现（借鉴 split-pro/spliit 的思路，MIT 正好允许）：
+ *  · 位掩码 DP（3^n）求最大零和子集拆分，n ≤ 14 全量求解；
+ *  · 每个零和组内 k 人用贪心配对出 k−1 笔（组内已是最优）；
+ *  · n > 14（同团就算大家吵翻了也到不了这个规模）或只有两人 → 直接贪心链。
+ */
 export function minimizeTransfers(balances: NetBalance[]): Transfer[] {
-  const creditors = balances
+  const nonzero = balances.filter((b) => toCent(b.net) !== 0)
+  if (nonzero.length <= 1) return []
+  if (nonzero.length > MAX_DP_MEMBERS) return pairMatching(nonzero)
+
+  const cents = nonzero.map((b) => toCent(b.net))
+  const n = nonzero.length
+  const FULL = (1 << n) - 1
+
+  // sum[mask]：mask 内净额之和（分）。增量计算避免每个 mask 都重扫
+  const sum = new Int32Array(1 << n)
+  for (let m = 1; m <= FULL; m += 1) {
+    const low = m & -m
+    sum[m] = sum[m ^ low] + cents[Math.log2(low)]
+  }
+
+  // dp[mask]：mask 内最多拆出几个互斥零和子集
+  // pick[mask]：拆走的那组子集（0 = 最低位成员不进任何子集，留给残组）
+  const dp = new Int8Array(1 << n)
+  for (let m = 1; m <= FULL; m += 1) {
+    const low = m & -m
+    let best = dp[m ^ low]
+    let use = 0
+    let s = m
+    while (s) {
+      if (s & low && sum[s] === 0) {
+        const cand = dp[m ^ s] + 1
+        if (cand > best) {
+          best = cand
+          use = s
+        }
+      }
+      s = (s - 1) & m
+    }
+    dp[m] = best
+    pickMask[m] = use
+  }
+
+  // 重建分区：每组人数 ≥ 2（单人净额 ≠ 0），残组（全体和为零）必 ≥ 2 人
+  const masksOf = (mask: number): number[] => {
+    const out: number[] = []
+    for (let i = mask; i; i &= i - 1) out.push(Math.log2(i & -i))
+    return out
+  }
+  let consumed = 0
+  let m = FULL
+  const groups: number[][] = []
+  while (m) {
+    const use = pickMask[m]
+    if (use) {
+      groups.push(masksOf(use))
+      m ^= use
+      consumed |= use
+    } else {
+      m ^= m & -m
+    }
+  }
+  const residual = FULL ^ consumed
+  if (residual) groups.push(masksOf(residual))
+
+  const out: Transfer[] = []
+  for (const idxs of groups) {
+    out.push(...pairMatching(idxs.map((i) => nonzero[i])))
+  }
+  return out
+}
+
+/** 贪心对冲：应收/应付各降序后顺次对冲（组内、降级路径共用） */
+function pairMatching(list: NetBalance[]): Transfer[] {
+  const creditors = list
     .filter((b) => toCent(b.net) > 0)
     .map((b) => ({ id: b.memberId, cent: toCent(b.net) }))
     .sort((a, b) => b.cent - a.cent)
 
-  const debtors = balances
+  const debtors = list
     .filter((b) => toCent(b.net) < 0)
     .map((b) => ({ id: b.memberId, cent: -toCent(b.net) }))
     .sort((a, b) => b.cent - a.cent)

@@ -7,6 +7,7 @@ import { uid } from '@/utils/id'
 import { addDays, daysBetween } from '@/utils/format'
 import { isIndoorPoi } from '@/utils/indoor'
 import { tasteBoost, type Taste } from '@/utils/taste'
+import { twoOptDay } from '@/utils/twoOpt'
 
 /** 生成入口的附加选项 */
 export interface GenOpts {
@@ -465,7 +466,10 @@ function ruleEnginePlan(
     }
   }
 
-  return plan
+  // 最近邻生长后补一轮 2-opt（utils/twoOpt）：贪心生长会做出交叉式绕路，
+  // 这里只收获「更顺路」，不打翻种子、不换集合；攻略模式不走这条线。
+  const optimized: PoiSeed[][] = plan.map((d) => twoOptDay(d, distanceKm))
+  return optimized
 }
 
 /** 攻略排布：按经典路线每天的主题顺序直接铺，保留真人玩法的时间先后 */

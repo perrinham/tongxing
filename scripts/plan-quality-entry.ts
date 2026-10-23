@@ -8,6 +8,7 @@
  *  ④ isWetDayCode 的 WMO 码口径 + isIndoorPoi 推断口径
  *  ⑦ 个性化口味画像：足迹 → 权重，选点温和加权；样本 <2 不生效；不碰聚类
  *  ⑧ 个性化再深一层：评分敏感度（普遍给分严的用户更吃高评分）+ 同城打卡重访降权
+ *  ⑨ 顺路优化：最近邻生长后的 2-opt 反转（TREK 思想，锁种子）+ 校验口径
  */
 import assert from 'node:assert/strict'
 import type { CitySeed, PoiSeed } from '../src/data/poi'
@@ -15,6 +16,7 @@ import { generateItinerary, isWetDayCode } from '../src/utils/itinerary'
 import { isIndoorPoi } from '../src/utils/indoor'
 import { SNACK_SLOT_LABELS, snackSlotFor } from '../src/services/snacks'
 import { CITY_TAGS, computeTaste, poiTasteTags, sensitivityOf, tasteBoost } from '../src/utils/taste'
+import { twoOptDay } from '../src/utils/twoOpt'
 import type { WeatherDay, CityPassport } from '../src/types'
 
 let passed = 0
@@ -336,6 +338,43 @@ console.log('═══ ⑧ 个性化再深一层：评分敏感度 + 打卡重�
   })
   ok('护栏：全名单 → 与基线一致（种子回归 A）', dayItems(guardedAll, 0).find((i) => i.type === 'spot')?.title === '泊湖一侧')
   ok('护栏下 summary 无重访交代', !/打卡/.test(guardedAll.summary))
+}
+
+console.log('═══ ⑨ 顺路优化：最近邻后的 2-opt 反转 ═══')
+{
+  const euclid = (a: [number, number], b: [number, number]): number =>
+    Math.hypot(a[0] - b[0], a[1] - b[1])
+
+  // 硬编码实例（暴力搜索所得）：贪心最近邻序 32.83，2-opt 后 31.11
+  const greedyPath: [number, number][] = [[12, 12], [17, 11], [18, 5], [20, 4], [16, 23]]
+  const fixed = twoOptDay(greedyPath, euclid)
+  const len = (p: [number, number][]) => p.slice(1).reduce((s, q, i) => s + euclid(p[i], q), 0)
+  ok('交叉绕路被拆解（32.83 → 31.11）', Math.abs(len(fixed) - 31.11) < 0.02)
+  ok('头部种子锁定（上午从这开始）', fixed[0][0] === 12 && fixed[0][1] === 12)
+  ok('集合不变', new Set(fixed.map((p) => p.join(','))).size === 5)
+  const expected: [number, number][] = [[12, 12], [18, 5], [20, 4], [17, 11], [16, 23]]
+  ok('顺序与预期一致（不换向倾向）', JSON.stringify(fixed) === JSON.stringify(expected))
+
+  // 平凡输入：不动（确定性）
+  const two: [number, number][] = [[0, 0], [1, 1]]
+  const three: [number, number][] = [[0, 0], [1, 0], [2, 5]]
+  ok('不足 4 点不反转', JSON.stringify(twoOptDay(two, euclid)) === JSON.stringify(two) && JSON.stringify(twoOptDay(three, euclid)) === JSON.stringify(three))
+
+  // 生成级：2-opt 只会缩短/持平，且不破聚类断言的系统口径
+  const city: CitySeed = {
+    name: '两簇城',
+    alias: [],
+    intro: '',
+    pois: [
+      spot('西0', -0.22, 0.001, { rating: 4.9 }),
+      spot('西1', -0.21, 0.002, { rating: 4.85 }),
+      spot('西2', -0.2, 0.003, { rating: 4.8 }),
+      spot('东0', 0.22, -0.002, { rating: 4.75 }),
+      spot('东1', 0.23, -0.001, { rating: 4.7 })
+    ]
+  }
+  const out = generateItinerary({ ...BASE_INPUT }, undefined, { city })
+  ok('生成级：单天相邻跳跃仍 ≤3km（2-opt 收尾不打翻聚类）', maxJump(dayItems(out, 0)) <= 3)
 }
 
 console.log(`═══ 排程质量：${passed} 通过 / 0 失败 ═══`)

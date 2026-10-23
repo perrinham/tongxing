@@ -27,7 +27,7 @@ process.on('SIGINT', () => {
 })
 
 try {
-  console.log('· 打包行李清单测试入口…')
+  console.log('· 打包预算智能分配测试入口…')
   await build({
     entryPoints: [join(root, 'scripts/budget-entry.ts')],
     bundle: true,
