@@ -1,10 +1,31 @@
-import type { Day, ItineraryItem, ItemType } from '@/types'
+import type { Day, ItineraryItem, ItemType, WeatherDay } from '@/types'
 import { CITIES, matchCity, isKnownCity } from '@/data/poi'
 import type { PoiSeed, CitySeed } from '@/data/poi'
 import { getGuide, type CityGuide } from '@/data/guides'
 import { buildCityFromAmap } from '@/services/cityPoi'
 import { uid } from '@/utils/id'
 import { addDays, daysBetween } from '@/utils/format'
+import { isIndoorPoi } from '@/utils/indoor'
+
+/** 生成入口的附加选项 */
+export interface GenOpts {
+  /**
+   * 逐日预报（date → WeatherDay）。给了就做雨天适配：
+   * 预报当天有降水的日子，规则引擎排出的天把室内项稳定提前，并写 day.note 提示。
+   * 异步入口可直接给 Promise（页面用「天气请求 + 生成请求并发」省一跳延迟）。
+   */
+  weather?: Map<string, WeatherDay> | Promise<Map<string, WeatherDay> | undefined>
+  /**
+   * 测试注入口：直接喂合成城市，跳过 matchCity（matchCity 对未知地名会兜底
+   * CITIES[0]，用它构造的合成城市根本进不了排程）。仅同步入口认这个字段。
+   */
+  city?: CitySeed
+}
+
+/** WMO 天气码 ≥51 都是降水：51-67 雨/冻雨，71-86 雪，95-99 雷暴（0-48 是晴/云/雾） */
+export function isWetDayCode(code: number): boolean {
+  return code >= 51 && code < 100
+}
 
 /** 该城市是否在本地经典路线库里（在线库城市没有攻略兜底） */
 function guideHasPlan(city: CitySeed): boolean {
@@ -122,15 +143,16 @@ export type GenStageSink = (stage: GenStage, info: GenStageInfo) => void
  */
 export function generateItinerary(
   input: GenerateInput,
-  onStage?: GenStageSink
+  onStage?: GenStageSink,
+  opts?: { weather?: Map<string, WeatherDay>; city?: CitySeed }
 ): GenerateOutput {
-  const city = matchCity(input.destination)
-  const known = isKnownCity(input.destination)
+  const city = opts?.city ?? matchCity(input.destination)
+  const known = opts?.city ? true : isKnownCity(input.destination)
   const totalDays = Math.max(1, daysBetween(input.startDate, input.endDate))
   const pace = PACE_SLOTS[input.pace] || PACE_SLOTS.normal
   const prefs = input.prefs || []
 
-  return assemble(city, known, input, totalDays, pace, prefs, onStage)
+  return assemble(city, known, input, totalDays, pace, prefs, onStage, opts?.weather)
 }
 
 /**
@@ -139,12 +161,23 @@ export function generateItinerary(
  */
 export async function generateItineraryAsync(
   input: GenerateInput,
-  onStage?: GenStageSink
+  onStage?: GenStageSink,
+  opts?: GenOpts
 ): Promise<GenerateOutput> {
   const known = isKnownCity(input.destination)
   const totalDays = Math.max(1, daysBetween(input.startDate, input.endDate))
   const pace = PACE_SLOTS[input.pace] || PACE_SLOTS.normal
   const prefs = input.prefs || []
+
+  // 天气（Promise 支持页面「天气 + 生成并发」）：失败静默，天气永远不能变成报错
+  let weather: Map<string, WeatherDay> | undefined
+  if (opts?.weather) {
+    try {
+      weather = (await opts.weather) || undefined
+    } catch {
+      weather = undefined
+    }
+  }
 
   if (!known) {
     // 在线拉取要 1-2s，是整个链路里最值得先「流」出来的环节
@@ -157,7 +190,7 @@ export async function generateItineraryAsync(
       )
     })
     if (online) {
-      const out = assemble(online, true, input, totalDays, pace, prefs, onStage)
+      const out = assemble(online, true, input, totalDays, pace, prefs, onStage, weather)
       return out
     }
     // 在线抓取失败（断网/限流/地名检索质量差）：明确报错让用户重试。
@@ -169,10 +202,10 @@ export async function generateItineraryAsync(
   }
 
   const city = matchCity(input.destination)
-  return assemble(city, known, input, totalDays, pace, prefs, onStage)
+  return assemble(city, known, input, totalDays, pace, prefs, onStage, weather)
 }
 
-/** 组装：选攻略/规则引擎排布 -> 生成天与行程项 -> 交代策略 */
+/** 组装：选攻略/规则引擎排布 -> 天气适配 -> 生成天与行程项 -> 交代策略 */
 function assemble(
   city: CitySeed,
   known: boolean,
@@ -180,9 +213,18 @@ function assemble(
   totalDays: number,
   pace: { start: string; perDay: number },
   prefs: string[],
-  onStage?: GenStageSink
+  onStage?: GenStageSink,
+  weather?: Map<string, WeatherDay>
 ): GenerateOutput {
-  onStage?.('score', { count: city.pois.length })
+  // indoor 统一推断：内置库没标，在线库也没标 —— 一把尺子（utils/indoor）在装配口统一量
+  const marked: CitySeed = {
+    ...city,
+    pois: city.pois.map((p) => ({
+      ...p,
+      indoor: p.indoor ?? isIndoorPoi(p.name, p.area)
+    }))
+  }
+  onStage?.('score', { count: marked.pois.length })
   const days: Day[] = []
   for (let i = 0; i < totalDays; i += 1) {
     days.push({
@@ -196,11 +238,11 @@ function assemble(
   }
 
   // ---- 经典路线优先：命中攻略库则按真人玩法排布 ----
-  const guide = getGuide(city.name)
+  const guide = getGuide(marked.name)
   onStage?.('plan', { days: totalDays })
   const plan: PoiSeed[][] = guide
-    ? guidePlan(city, guide, totalDays, pace)
-    : ruleEnginePlan(city, totalDays, pace, prefs)
+    ? guidePlan(marked, guide, totalDays, pace)
+    : ruleEnginePlan(marked, totalDays, pace, prefs)
 
   // 攻略模式：用主题作当天标题，提示写入 day.note
   if (guide) {
@@ -211,6 +253,9 @@ function assemble(
       }
     })
   }
+
+  // ---- 天气适配：预报有降水的日子，室内项排前面 + note 提示 ----
+  adaptWeather(plan, days, weather, !!guide)
 
   // ---- 生成行程项 ----
   // plan 到这里**已经排好顺序**，直接铺上时间轴，不再重排：
@@ -223,8 +268,42 @@ function assemble(
   const items: ItineraryItem[] = itemsFromPlan(plan, days, city.name, pace)
   onStage?.('timeline', { count: items.length })
 
-  const summary = buildSummary(city.name, totalDays, input.pace, prefs, items, known, input.destination, guide)
+  const summary = buildSummary(marked.name, totalDays, input.pace, prefs, items, known, input.destination, guide)
   return { days, items, summary }
+}
+
+/**
+ * 天气适配：预报有降水的日子 ——
+ *  · 规则引擎模式：把该天的室内项（food 一律算室内 + isIndoorPoi 命中）稳定提前，
+ *    户外项整体后移（两侧各自保持地理顺路的相对顺序）。远郊 dayTrip 天只提示不重排
+ *    （就一个点，无序可排）。
+ *  · 攻略模式：真人玩法的主题顺序本就不该被算法打乱，只写 day.note 提示。
+ * 没预报 / 没下雨的天一律不动。note 是追加而不是覆盖（攻略模式 note 上已有 tip）。
+ */
+function adaptWeather(
+  plan: PoiSeed[][],
+  days: Day[],
+  weather: Map<string, WeatherDay> | undefined,
+  isGuide: boolean
+): void {
+  if (!weather) return
+  days.forEach((day, i) => {
+    const w = weather.get(day.date)
+    if (!w || !isWetDayCode(w.code)) return
+    const pois = plan[i]
+    if (pois?.length) {
+      if (!isGuide && !(pois.length === 1)) {
+        const indoor = pois.filter((p) => p.type === 'food' || p.indoor)
+        const outdoor = pois.filter((p) => !(p.type === 'food' || p.indoor))
+        if (indoor.length && outdoor.length) {
+          plan[i] = [...indoor, ...outdoor]
+        }
+      }
+    }
+    const wetWord = w.code >= 71 && w.code < 95 ? '降雪' : '降雨'
+    const tip = `预报有${wetWord}，${isGuide ? '经典路线顺序未动' : '已把室内项排前面'}，户外项建议带伞或调整`
+    day.note = day.note ? `${day.note}；${tip}` : tip
+  })
 }
 
 /** 取打分表里还没被用过的点 */
@@ -236,7 +315,18 @@ function queue2(scored: { poi: PoiSeed }[], plan: PoiSeed[][]): PoiSeed[] {
 
 type PlanPace = { start: string; perDay: number }
 
-/** 规则引擎排布（攻略库未命中时的兜底）：打分 -> 远郊分天 -> 地理近邻聚类 -> 补餐饮 */
+/**
+ * 规划天序的排布（攻略库未命中时的兜底）。
+ *
+ * 三步：
+ *  ① 远郊分天（dayTrip 点位单独占天，避免拖累市内行程）
+ *  ② 多天地理聚类：先用「最远种子」给每天定一个空间重心，再轮转生长 ——
+ *    每天 = 一小片地理区域，不会出现「第 1 天按分数铺开全城乱跑」
+ *    （旧版逐天贪心从『当天最后一个点』捡最近的，第 1 天吃掉全城高分点，
+ *    岳麓书院→东方红广场→折回岳麓山这种多绕 4km 的路线就是这么来的）
+ *  ③ 餐饮就近且顺路：选「离当天任意点最近」的食物，插到路径增量最小的位置
+ *    （不是无脑 append —— 否则午餐会排到一天的最后，顺序错乱）
+ */
 function ruleEnginePlan(
   city: CitySeed,
   totalDays: number,
@@ -282,33 +372,84 @@ function ruleEnginePlan(
     const isOnline = !guideHasPlan(city)
     const spotPerDay = isOnline ? pace.perDay : Math.max(1, pace.perDay - 1)
 
-    let cursor = 0
-    while (cursor < queue.length) {
-      const dayIdx = availableDays.find(
-        (i) => plan[i].filter((p) => p.type === 'spot').length < spotPerDay
-      )
-      if (dayIdx === undefined) break
-
-      const current = plan[dayIdx]
-      const anchor = current.length ? current[current.length - 1] : null
-      if (!anchor) {
-        current.push(queue[cursor])
-        cursor += 1
-        continue
-      }
-      let bestIdx = -1
-      let bestDist = Infinity
-      for (let k = cursor; k < queue.length; k += 1) {
-        const d = distanceKm(anchor, queue[k])
-        if (d < bestDist) {
-          bestDist = d
-          bestIdx = k
+    // —— 种子：给每天定一个地理重心（高分优先 + 空间分散） ——
+    // morningMust 是必去，永远当第 0 天的种子；其余天按「与已有种子最远」选种，
+    // 让各天天然散开成片区（市 7 区 vs 江对岸 vs 城东各占一天）而不是挤在同一片。
+    const SEED_SEP_KM = 4
+    const seeds: PoiSeed[] = []
+    for (let d = 0; d < availableDays.length; d += 1) {
+      if (!queue.length) break
+      let idx = 0
+      if (d > 0) {
+        // 第 2 颗种子起：取「与已有种子距离都 ≥ SEED_SEP_KM 的最高分点」，
+        // 让各天天然散成片区（市中心 vs 江对岸 vs 城东各占一天）；
+        // 全城小而挤（任意两点 < 4km，线上小城常见）时找不到分散种子 ——
+        // 退化为取队首，照常分天（小城本来就不需要分散）
+        const SEP_KM = 4
+        // 只看队头（高分）30 个：低分点不值得为了空间分散单独占天
+        idx = -1
+        for (let k = 0; k < queue.length && k < 30; k += 1) {
+          if (seeds.every((q) => distanceKm(q, queue[k]) >= SEP_KM)) {
+            idx = k
+            break
+          }
         }
+        if (idx === -1) idx = 0
       }
-      if (bestIdx < 0) break
-      current.push(queue[bestIdx])
-      queue.splice(bestIdx, 1)
+      const s = queue.splice(idx, 1)[0]
+      seeds.push(s)
+      plan[availableDays[d]].push(s)
     }
+
+    // —— 轮转生长：每天轮流从队列捡「离本天最后一个点最近」的未用点 ——
+    // 循环占据保证几天同步长出（后长出来的天也能吃到高分点附近的点），
+    // 而不是让第 0 天把队列前段消化完。
+    let grew = true
+    while (grew) {
+      grew = false
+      for (const dayIdx of availableDays) {
+        const current = plan[dayIdx]
+        if (current.filter((p) => p.type === 'spot').length >= spotPerDay) continue
+        if (!current.length) continue
+        const anchor = current[current.length - 1]
+        let bestIdx = -1
+        let bestDist = Infinity
+        for (let k = 0; k < queue.length; k += 1) {
+          const d = distanceKm(anchor, queue[k])
+          if (d < bestDist) {
+            bestDist = d
+            bestIdx = k
+          }
+        }
+        if (bestIdx < 0) continue
+        current.push(queue[bestIdx])
+        queue.splice(bestIdx, 1)
+        grew = true
+      }
+      // 空天（种子耗尽后的多余天数）不被轮转管到 —— 由下面的 leftover 补位
+    }
+  }
+
+  // —— 餐饮就近且顺路：插入位置选「路径增量最小」的两点之间 ——
+  const insertFood = (current: PoiSeed[], f: PoiSeed) => {
+    if (current.length <= 1) {
+      current.push(f)
+      return
+    }
+    let bestAt = -1
+    let bestCost = Infinity
+    for (let j = 0; j < current.length; j += 1) {
+      // 插在 j 之后的代价 = dist(j,f) + dist(f,j+1) - dist(j,j+1)（桥头拆开重接的增量）
+      const a = current[j]
+      const b = current[j + 1]
+      const add =
+        distanceKm(a, f) + (b ? distanceKm(f, b) : 0) - (b ? distanceKm(a, b) : 0)
+      if (add < bestCost) {
+        bestCost = add
+        bestAt = j
+      }
+    }
+    current.splice(bestAt + 1, 0, f)
   }
 
   const foodPool = [...foods]
@@ -327,7 +468,7 @@ function ruleEnginePlan(
           bestIdx = k
         }
       })
-      current.push(foodPool[bestIdx])
+      insertFood(current, foodPool[bestIdx])
       foodPool.splice(bestIdx, 1)
     }
   }

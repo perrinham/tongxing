@@ -10,6 +10,8 @@ export interface PoiSeed {
   /** 每人预估花费 */
   cost: number
   best?: 'morning' | 'afternoon' | 'evening' | 'night' | 'any'
+  /** 室内点位（雨天优先排前的依据）；缺省按名字推断，见 utils/indoor.ts */
+  indoor?: boolean
   /** 远郊，单独占一天 */
   dayTrip?: boolean
   area: string

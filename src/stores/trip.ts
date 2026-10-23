@@ -16,7 +16,8 @@ import type {
   Trip,
   TripDoc,
   TripSpaceFull,
-  Vote
+  Vote,
+  WeatherDay
 } from '@/types'
 import { storageFor, emptySyncMeta } from '@/repository/storage'
 import { uid } from '@/utils/id'
@@ -1041,11 +1042,12 @@ export const useTripStore = defineStore('trip', {
     async generateAsync(
       tripId: string,
       input: GenerateInput,
-      onStage?: GenStageSink
+      onStage?: GenStageSink,
+      opts?: { weather?: Map<string, WeatherDay> | Promise<Map<string, WeatherDay> | undefined> }
     ): Promise<string> {
       const trip = this.trips.find((t) => t.id === tripId)
       if (!trip) return ''
-      const out = await generateItineraryAsync(input, onStage)
+      const out = await generateItineraryAsync(input, onStage, opts)
       return this.applyGenerate(tripId, input, out)
     },
 

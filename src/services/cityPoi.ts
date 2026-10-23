@@ -1,6 +1,7 @@
 import { searchPoi, searchPoiWithTypes, geocode } from './amap'
 import type { CitySeed, PoiSeed } from '@/data/poi'
 import { AMAP_ENABLED } from '@/config'
+import { isIndoorPoi } from '@/utils/indoor'
 
 /**
  * 高德在线城市库：把任意城市现场抓成一份候选池。
@@ -77,6 +78,7 @@ function toSeed(p: AmapPoiLike, type: PoiSeed['type'], opts: SeedOpts): PoiSeed 
     duration: opts.duration,
     cost: opts.cost,
     best,
+    indoor: isIndoorPoi(name, p.address || ''),
     area: p.address || '',
     address: p.address || '',
     rating: opts.rating || undefined

@@ -5,6 +5,7 @@ import { useTripStore } from '@/stores/trip'
 import { nav } from '@/utils/nav'
 import { PREF_OPTIONS, type PaceLevel, type GenStage, type GenStageInfo } from '@/utils/itinerary'
 import { isKnownCity } from '@/data/poi'
+import { fetchTripWeather } from '@/services/weather'
 import AppNav from '@/components/AppNav.vue'
 import AppIcon from '@/components/AppIcon.vue'
 
@@ -134,6 +135,14 @@ async function run() {
   // 让 loading 状态先渲染出来，再跑（本地库同步完成；在线城市要等高德检索，约 1-2s）
   setTimeout(async () => {
     try {
+      // 天气预报与生成请求并发（雨天适配要用）：失败静默，天气永远不能变成报错
+      const weatherSrc = fetchTripWeather(
+        trip.value!.destination,
+        trip.value!.startDate,
+        trip.value!.endDate
+      )
+        .then((w) => w?.byDate)
+        .catch(() => undefined)
       // 阶段播报打进打字机队列；生成完等播报全部打完，再亮「就绪」并跳转
       const summary = await store.generateAsync(tripId.value, {
         destination: trip.value!.destination,
@@ -142,7 +151,7 @@ async function run() {
         peopleCount: store.membersOf(tripId.value).length,
         prefs: prefs.value,
         pace: pace.value
-      }, onStage)
+      }, onStage, { weather: weatherSrc })
       await drainStream()
       result.value = summary
       // 用户若已手动返回，不再强制拉回行程页
