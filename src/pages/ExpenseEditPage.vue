@@ -6,11 +6,13 @@ import { nav } from '@/utils/nav'
 import { CATEGORY_META, CATEGORY_ORDER, categoryMetaOf, money, todayISO } from '@/utils/format'
 import { splitAmount } from '@/utils/settlement'
 import { evalAmountExpr } from '@/utils/amountExpr'
+import { FX_CURRENCIES, FX_STAMP, fxRateOf, fxToCny } from '@/utils/fx'
 import type { ExpenseCategory, SplitMode } from '@/types'
 import AppNav from '@/components/AppNav.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import AppAvatar from '@/components/AppAvatar.vue'
 import AppEmpty from '@/components/AppEmpty.vue'
+import AppSheet from '@/components/AppSheet.vue'
 
 const store = useTripStore()
 
@@ -285,6 +287,26 @@ function remove() {
 }
 
 const quickAmounts = [50, 100, 200, 500]
+
+// ── 汇率换算：外币小票 → 行程币种（¥）入账，折完一键进金额框 ──
+const showFx = ref(false)
+const fxCode = ref('USD')
+const fxBuf = ref('')
+
+/** 外币输入同样吃算式（小票上有 10% 服务费时直接敲 128×1.1） */
+const fxAmt = computed(() => evalAmountExpr(fxBuf.value) ?? 0)
+const fxRes = computed(() => (fxAmt.value !== 0 ? fxToCny(fxAmt.value, fxCode.value) : null))
+const fxRate = computed(() => fxRateOf(fxCode.value))
+
+function applyFx() {
+  if (fxRes.value === null || fxRes.value === 0) return
+  // 替换金额缓冲而不是追加：换算这条链的目的就是「这笔帐的总额」
+  amountText.value = String(fxRes.value)
+  showFx.value = false
+  fxBuf.value = ''
+  uni.showToast({ title: '已折算：接着选付的人', icon: 'none' })
+}
+
 </script>
 
 <template>
@@ -325,6 +347,10 @@ const quickAmounts = [50, 100, 200, 500]
       <div class="quick">
         <button v-for="q in quickAmounts" :key="q" class="q-btn" @click="amountText = String(q)">
           {{ q }}
+        </button>
+        <!-- 汇率换算：手持外币小票时先折成行程币种，再回来接着记 -->
+        <button class="q-btn fx-btn" @click="showFx = true">
+          汇率<text class="fx-code num">{{ fxCode }}</text>
         </button>
       </div>
     </div>
@@ -530,6 +556,49 @@ const quickAmounts = [50, 100, 200, 500]
         {{ isEdit ? '保存' : '记下' }}
       </button>
     </div>
+
+    <!-- 汇率换算面板：选币种 → 敲外币金额（支持算式）→ 一键折成行程币种 -->
+    <AppSheet v-model="showFx" title="汇率换算">
+      <div class="fx-grid">
+        <button
+          v-for="c in FX_CURRENCIES"
+          :key="c.code"
+          class="fx-chip"
+          :class="{ on: fxCode === c.code }"
+          @click="fxCode = c.code"
+        >
+          <span class="fx-cc num">{{ c.code }}</span>
+          <span class="fx-name">{{ c.name }}</span>
+        </button>
+      </div>
+
+      <div class="fx-io">
+        <div class="fx-line">
+          <input
+            v-model="fxBuf"
+            class="fx-input num"
+            placeholder="外币金额，可带算式如 128×1.1"
+            inputmode="decimal"
+          />
+          <span class="fx-unit num">{{ fxCode }}</span>
+        </div>
+
+        <template v-if="fxRes !== null">
+          <div class="fx-line result">
+            <span class="num fx-out">{{ money(fxRes, currency) }}</span>
+            <span class="fx-cap">
+              1 {{ fxCode }} ≈ {{ money(fxRate || 0, currency) }}
+            </span>
+          </div>
+          <button class="fx-apply" :disabled="fxRes === 0" @click="applyFx">
+            记 {{ money(fxRes, currency) }}
+          </button>
+        </template>
+        <p v-else class="fx-hint">敲上外币金额，折好直接填进上面的数字框</p>
+      </div>
+
+      <p class="fx-stamp">{{ FX_STAMP }}</p>
+    </AppSheet>
     </template>
   </div>
 </template>
@@ -616,6 +685,131 @@ const quickAmounts = [50, 100, 200, 500]
 
 .q-btn:active {
   background: var(--bg-sunken);
+}
+
+/* 汇率入口：数字快抄里唯一的文字钮，用品牌绿描边示 distinguishing */
+.q-btn.fx-btn {
+  margin-left: auto;
+  color: var(--brand-deep);
+  background: var(--brand-soft);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.fx-code {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--brand-deep);
+}
+
+/* ── 汇率换算面板 ─────────────────────────────────────── */
+.fx-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  padding: 2px 0 12px;
+}
+
+.fx-chip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 8px 2px;
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+
+.fx-chip.on {
+  background: var(--brand-soft);
+}
+
+.fx-cc {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.fx-chip.on .fx-cc {
+  color: var(--brand-deep);
+}
+
+.fx-name {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.fx-io {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-subtle);
+}
+
+.fx-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.fx-input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  background: var(--bg-card);
+  border-radius: 10px;
+  padding: 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.fx-unit {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-tertiary);
+}
+
+.fx-line.result {
+  justify-content: space-between;
+}
+
+.fx-out {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--brand-deep);
+}
+
+.fx-cap {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.fx-apply {
+  height: 44px;
+  border-radius: 12px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--brand);
+}
+
+.fx-apply[disabled] {
+  opacity: 0.55;
+}
+
+.fx-hint {
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.fx-stamp {
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 
 .card.tight {
