@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev:mp-weixin": "node node_modules/@dcloudio/vite-plugin-uni/bin/uni.js -p mp-weixin",
-    "build:mp-weixin": "node node_modules/@dcloudio/vite-plugin-uni/bin/uni.js build -p mp-weixin && node scripts/patch-vendor.mjs",
+    "build:mp-weixin": "node node_modules/@dcloudio/vite-plugin-uni/bin/uni.js build -p mp-weixin && node scripts/patch-vendor.mjs && node scripts/cloud-lib-sync.mjs && node scripts/patch-mp-cloud.mjs",
     "dev:h5": "node node_modules/@dcloudio/vite-plugin-uni/bin/uni.js",
     "build:h5": "node node_modules/@dcloudio/vite-plugin-uni/bin/uni.js build",
     "typecheck": "node node_modules/vue-tsc/bin/vue-tsc.js --noEmit",
@@ -28,8 +28,15 @@
     "contrast:audit": "node scripts/check-contrast.mjs",
     "check:platform": "node scripts/check-platform.mjs",
     "patch:vendor": "node scripts/patch-vendor.mjs",
-    "test": "npm run server:smoke && npm run client:smoke && npm run city:smoke && npm run amap:smoke",
-    "verify": "node node_modules/vue-tsc/bin/vue-tsc.js --noEmit && node scripts/check-token-sync.mjs && node scripts/check-contrast.mjs && node scripts/check-palette.mjs && node scripts/check-platform.mjs && npm run build:mp-weixin && node scripts/lint-wxss.mjs && node scripts/city-smoke-test.mjs"
+    "cloud:sync-lib": "node scripts/cloud-lib-sync.mjs",
+    "cloud:patch": "node scripts/patch-mp-cloud.mjs",
+    "cloud:smoke": "node scripts/cloud-lib-sync.mjs && node scripts/cloud-smoke-test.mjs",
+    "lib:parity": "node scripts/cloud-lib-sync.mjs && node scripts/lib-parity-test.mjs",
+    "cloud:setup": "node scripts/cloud-setup.mjs",
+    "cloud:verify": "node scripts/cloud-setup.mjs --verify",
+    "migrate:export": "node scripts/migrate-export.mjs",
+    "test": "npm run server:smoke && npm run client:smoke && npm run city:smoke && npm run lib:parity && npm run cloud:smoke && npm run amap:smoke",
+    "verify": "node node_modules/vue-tsc/bin/vue-tsc.js --noEmit && node scripts/check-token-sync.mjs && node scripts/check-contrast.mjs && node scripts/check-palette.mjs && node scripts/check-platform.mjs && npm run build:mp-weixin && node scripts/lint-wxss.mjs && npm run lib:parity && npm run cloud:smoke && node scripts/city-smoke-test.mjs"
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-5020420260813003",

@@ -36,11 +36,13 @@ npm run devtools       # 打开 dist/build/mp-weixin
 npm run wxss:lint
 
 # 测试
-npm run test           # = server:smoke + client:smoke + city:smoke + amap:smoke
+npm run test           # = server:smoke + client:smoke + city:smoke + lib:parity + amap:smoke + cloud:smoke
 npm run server:smoke   # 后端：城市攻略 + 行程同步 + 写入校验 + 安全防线 + SQLite + HLC + 字段级合并 + 账号授权 + WebSocket 实时
 npm run client:smoke   # 客户端：三台设备跑完整同步流程（真实 store + 真实后端）+ HLC 自检 + 字段级合并 + 身份登录 + 实时通道
 npm run city:smoke     # 城市足迹专项（已接入 verify）：markCity / saveGuide / 持久化 / 别名解析 / publishMyGuide / loadShared / retractMyGuide / 后端不可达静默回退
-npm run amap:smoke     # 高德在线生成端到端：本地城回归 + 任意城市（长沙）在线抓池生成 + 完全断网回退。**真实调用高德 API**（需网络，每次约 6 个请求）
+npm run lib:parity     # 孪生实现一致性：HLC / LWW 合并 / ACL 的 server/lib/*.mjs 与 cloudfunctions/_lib/*.js 喂同一批语料逐项比对（含边界）
+npm run cloud:smoke    # 云函数专项（离线）：用内存版 wx-server-sdk 驱动真实云函数，覆盖行程/攻略/登录/天气/建集合/大空间分页
+npm run amap:smoke     # 高德在线生成端到端：本地城回归 + 任意城市（长沙）在线抓池生成 + 完全断网语义。**真实调用高德 API**（需网络，每次约 6 个请求）
 ```
 
 **不写死断言条数** —— 每个脚本末尾都会打 `===== 结果：N 通过 / M 失败 =====`，以输出为准。
@@ -82,6 +84,77 @@ WS_COALESCE_MS=80       # 同一空间的变更合并窗口，窗口内多次改
 反向代理要放行升级请求：`Upgrade` / `Connection` 两个头必须透传，且**读超时要大于 `WS_PING_MS`**
 （nginx 默认 `proxy_read_timeout 60s`，心跳 25s 够用；调大心跳就得同步调代理）。
 `ALLOWED_ORIGINS` 同样作用于握手阶段的 `Origin` 校验。
+
+### 部署到微信云开发（云函数 + 云数据库）
+
+后端有**两条并行通道**，由是否配置 `VITE_CLOUD_ENV_ID` 决定走哪条：
+
+| 通道 | 触发条件 | 说明 |
+|---|---|---|
+| 自托管 HTTP + WebSocket | 默认 | 上面「部署后端」那套，`server/` 保留为自托管方案与测试参考实现 |
+| 微信云开发（云函数 + 云数据库） | `VITE_CLOUD_ENV_ID` 非空 **且** 运行环境有 `wx.cloud` | 小程序端专用；云函数无长连接，实时同步自动降级为「按需拉取」 |
+
+```bash
+# .env.local（不入库）：填环境 ID 即切到云函数通道；留空/删掉即回退 HTTP
+VITE_CLOUD_ENV_ID=cloud1-d9gujmuaxb69ab976
+
+# 构建时自动完成：同步 _lib 副本 -> 拷 cloudfunctions 到产物 -> 写 cloudfunctionRoot
+npm run build:mp-weixin
+```
+
+产物 `dist/build/mp-weixin/` 里会多出 `cloudfunctions/{auth,trips,guides,weather,migrate}`，
+`project.config.json` 的 `cloudfunctionRoot` 也由 `scripts/patch-mp-cloud.mjs` 自动写成 `cloudfunctions/`
+（**别手改产物**，下次构建会被覆盖）。部署步骤：
+
+1. **建集合**：云开发控制台 → 数据库 → 新建 `spaces` / `records` / `tombstones` / `space_members` / `guides`；
+   或者跑一次 `npm run cloud:setup`（见下，走开发者工具自动化，等价于调 `trips`/`guides` 的 `{action:'setup'}`）。
+2. **建索引**（控制台手动建，SDK 建不了）：`spaces.code`、`spaces.owner_openid`、`spaces.updated_at`(DESC)、
+   `records.space_id`、`tombstones.space_id`、`space_members.space_id`、`guides.city_name`、`guides.author_openid`。
+   数据量小时不建也能跑（全表扫），但早晚要建。
+3. **上传云函数**：开发者工具 → 云开发 → 云函数 → 对 `auth` / `trips` / `guides` / `weather` 右键
+   「上传并部署：云端安装依赖」。每个函数都自带独立的 `_lib` 副本（生成物，勿手改）。
+   也可以用命令行（IDE 必须先打开、登录）：
+   ```bash
+   CLI="/Applications/wechatwebdevtools.app/Contents/MacOS/cli"
+   "$CLI" cloud functions deploy --env cloud1-d9gujmuaxb69ab976 \
+     --names auth trips guides weather --project "$PWD/dist/build/mp-weixin" --remote-npm-install
+   # 新建函数有 Creating 竞态，报「处于Creating状态」就等 20 秒重跑一次
+   "$CLI" cloud functions list --env cloud1-d9gujmuaxb69ab976 --project "$PWD/dist/build/mp-weixin"
+   ```
+4. **⚠️ 把 `weather` 的超时从 3 秒调到 20 秒**（控制台 → 云函数 → weather → 配置）。
+   默认 3 秒对冷启动不够：首次调用会 `FUNCTIONS_TIME_LIMIT_EXCEEDED`，之后热调用只要 0.5 秒。
+   这是唯一需要出网的函数，其余函数冷启动也在 3 秒内。
+5. **建集合 + 端到端体检**（走开发者工具自动化端口，需要 IDE 打开项目）：
+   ```bash
+   npm run build:mp-weixin
+   CLI="/Applications/wechatwebdevtools.app/Contents/MacOS/cli"
+   "$CLI" auto --project "$PWD/dist/build/mp-weixin" --auto-port 9420   # 保持运行
+   npm run cloud:setup     # 建集合
+   npm run cloud:verify    # 建集合 + 真实调用：auth 登录 / trips 列表 / guides / weather / 写路径往返
+   ```
+   `cloud:verify` 是**对着真实云环境**跑的（不是 mock）：它会 push 一个空间再删掉、写一条攻略再删掉，
+   用来验证 records/tombstones/guides 集合与 LWW 写入确实通了。断言失败会非 0 退出。
+6. **迁移历史数据**（可选，一次性）：
+   ```bash
+   npm run migrate:export    # 读 server/data/travel.sqlite3 -> cloudfunctions/migrate/snapshot.json
+   ```
+   然后上传 `migrate` 云函数，调用 `{ "action": "plan" }` 先看将写入的行数，确认后再 `{ "action": "run" }`；
+   导入完成后**删除 `migrate` 云函数**（它自带整库快照，长期留着不合适）。
+   快照含真实用户数据，已在 `.gitignore` 里排除，**不要提交**。
+
+云函数之间的共享代码只有 `cloudfunctions/_lib/` 一处源头，`npm run cloud:sync-lib` 负责分发到各函数目录
+（`cloud:smoke` 与 `build:mp-weixin` 都会先跑它）。改了 `_lib` 记得重新上传受影响的所有函数。
+
+云函数侧的身份一律取 `cloud.getWXContext().OPENID`，匿名语义由客户端声明 `loggedIn` 决定 ACL；
+返回约定：成功直接返回数据对象，失败返回 `{ e: { status, message } }`，适配层转成 `BackendError`。
+
+**两条容易踩的坑**（都是真机部署时才现形的，`cloud:smoke` 的假 SDK 覆盖不到）：
+
+- **「集合已存在」的报错形态不统一**：有时只给 `errCode: -502005`、有时只给 `errMsg: "collection already exists"`。
+  只判 errCode 的话，第二次跑 `setup` 就会 500。`_lib/store.js` 的 `ensureCollection` 现在两样都判。
+- **`cloudfunctionRoot` 是产物内的相对路径**（`cloudfunctions/`），不是仓库根。DevTools 打开的项目根是
+  `dist/build/mp-weixin/`，指到项目外它不认。所以云函数是**拷进产物**的（`scripts/patch-mp-cloud.mjs`），
+  源仍然是仓库根的 `cloudfunctions/`。
 
 **关于 `npm install` / 构建的一个环境说明（重要）**
 当前沙箱里 `npm install` 因 broker 限制无法完成 `node_modules/.bin` 的符号链接，故标准 `npm run *` 脚本可能跑不起来。可改用直接调用 uni CLI：
@@ -536,9 +609,11 @@ npm run markers           # 改了 --brand / --warn 之后重新生成地图 mar
 **验证链**（`npm run verify`，按顺序）：
 
 ```
-vue-tsc → check:tokens → contrast:audit → palette:audit → build:mp-weixin → wxss:lint → city:smoke
-   类型     令牌漂移      对比度闸门       色板体检        双端之一        WXSS 编译     接口冒烟
+vue-tsc → check:tokens → contrast:audit → palette:audit → build:mp-weixin → wxss:lint → lib:parity → cloud:smoke → city:smoke
 ```
+
+各步各管一段：类型 / 令牌漂移 / 对比度闸门 / 色板体检 / 双端构建之一 / WXSS 编译 /
+孪生实现（`server/lib` ↔ `cloudfunctions/_lib`）一致性 / 云函数冒烟 / 接口冒烟。
 
 三个颜色闸门（`check:tokens` / `contrast:audit` / `palette:audit`）都在链里，且都是
 「有真实缺陷就返回非 0」。单独跑其中一个只是为了看完整表格。

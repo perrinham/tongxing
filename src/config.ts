@@ -23,6 +23,35 @@ export const AMAP_WEB_KEY = amapKeyFromEnv()
 export const AMAP_ENABLED = AMAP_WEB_KEY.trim().length > 0
 
 /**
+ * 微信云开发环境 id。
+ *
+ * 设置后小程序端走**云函数**通道（cloudfunctions/），不再依赖自托管后端；
+ * 留空则维持原 HTTP 行为（本地开发 / 未迁移的部署）。
+ *
+ * 环境 id 在微信开发者工具「云开发」控制台可见（形如 cloud1-xxxxxxxx）。
+ * 本地/CI 放 `.env.local`（已 gitignore）；正式发布时也在这里写死即可 ——
+ * 环境 id 不是密钥，泄漏不构成越权（真正的权限由云函数的 OPENID 判定）。
+ *
+ * 与高德 key 同样的取值姿势：Vite 构建期用 import.meta.env，Node 测试回退 process.env。
+ */
+function cloudEnvFromEnv(): string {
+  const vite = import.meta.env?.VITE_CLOUD_ENV_ID
+  if (vite) return String(vite)
+  const procEnv = (globalThis as { process?: { env?: Record<string, string> } }).process?.env
+  return String(procEnv?.VITE_CLOUD_ENV_ID ?? '')
+}
+
+export const CLOUD_ENV_ID = cloudEnvFromEnv()
+
+/**
+ * 是否启用云开发通道（env id 非空）。
+ *
+ * ⚠️ 真正生效还要求运行环境存在 `wx.cloud`（见 services/cloud.ts 的 hasCloud）：
+ * 测试环境没有 wx，所以即便这里为 true 也仍走 HTTP —— client:smoke/city:smoke 不受影响。
+ */
+export const CLOUD_ENABLED = CLOUD_ENV_ID.trim().length > 0
+
+/**
  * 城市攻略共享 + 行程同步后端配置。
  *
  * 后端提供两块能力（见 server/index.mjs）：

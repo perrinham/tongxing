@@ -5,7 +5,8 @@
  * 1. 本地 6 城（成都）走精修库 + 经典路线，行为不回归
  * 2. 陌生城市（长沙）走高德在线库：能出多天计划、天数正确、
  *    有景点有餐饮、坐标落在目的地城市范围内
- * 3. 高德失败时（离线模拟）回退本地模板，不崩
+ * 3. 完全断网时：陌生城市**明确抛错**（不静默回退成别的城市），
+ *    内置城市照常出计划（走本地精修库，本就不需要网络）
  */
 import { mock } from './uni-mock'
 import { createPinia } from 'pinia'
@@ -88,17 +89,38 @@ cs.days.forEach((d) => {
 })
 
 // ────────────────────────────────────────────────────────────────────────
-section('[3] 高德失败回退：完全断网后不崩、回退本地模板')
+section('[3] 完全断网：陌生城市明确失败、内置城市照常出计划')
 
 mock.setOfflineAll(true)
-const fallback = await generateItineraryAsync({ destination: '长沙', ...BASE_INPUT })
-ok(fallback.days.length === 3, '回退后仍出 3 天计划')
-ok(fallback.items.length >= 6, '回退后仍有行程项（成都模板）', fallback.items.length)
+
+// 3a. 陌生城市抓不到就**明确抛错**，绝不静默回退本地模板 ——
+//     回退会兜底到 CITIES[0]（成都），用户要洛阳却拿到一份成都行程，比失败更糟。
+//     ⚠️ 别拿前面刚在线抓过的城市（长沙）测这条：cityPoi 有会话级 seedCache，
+//     同城第二次调用直接命中缓存、压根不发请求，断网开关形同虚设。
+//     这条用例以前就是「全绿但什么都没测到」——现在换成没抓过的洛阳。
+let offlineErr: Error | null = null
+try {
+  await generateItineraryAsync({ destination: '洛阳', ...BASE_INPUT })
+} catch (e) {
+  offlineErr = e as Error
+}
+ok(offlineErr !== null, '陌生城市断网 -> 抛错，而不是静默出计划')
 ok(
-  fallback.summary.includes('在线检索失败'),
-  'summary 交代了回退',
-  fallback.summary
+  !!offlineErr && offlineErr.message.includes('未能从高德拉取') && offlineErr.message.includes('洛阳'),
+  '错误文案指明了城市与原因',
+  offlineErr?.message
 )
+
+// 3b. 内置城市走本地精修库，断网也能出计划，且不该谎报「在线检索失败」
+const localOffline = await generateItineraryAsync({ destination: '成都', ...BASE_INPUT })
+ok(localOffline.days.length === 3, '内置城市断网仍出 3 天计划', localOffline.days.length)
+ok(localOffline.items.length >= 8, '内置城市断网仍行程项充足', localOffline.items.length)
+ok(
+  !localOffline.summary.includes('在线检索失败'),
+  '内置城市不谎报在线检索失败',
+  localOffline.summary
+)
+
 mock.setOfflineAll(false)
 
 // ────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,9 @@
+{
+  "name": "trips",
+  "version": "1.0.0",
+  "description": "同行 · 行程空间云函数（server/routes/trips.mjs 的云端移植）",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "^4.0.2"
+  }
+}

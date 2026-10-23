@@ -1,0 +1,9 @@
+{
+  "name": "guides",
+  "version": "1.0.0",
+  "description": "同行 · 城市攻略云函数（server/routes/guides.mjs 的云端移植）",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "^4.0.2"
+  }
+}

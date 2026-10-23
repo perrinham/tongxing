@@ -12,6 +12,8 @@
  */
 import { BACKEND_ENABLED, BACKEND_TOKEN, REQUEST_TIMEOUT_MS } from '@/config'
 import { getBackendBase } from '@/services/backendBase'
+import { BackendError } from '@/services/backendError'
+import { callCloud, hasCloud, type CloudFunctionName } from '@/services/cloud'
 import type {
   CityGuide,
   CityStatus,
@@ -42,14 +44,7 @@ export interface PushPayload {
   tombstones: Tombstone[]
 }
 
-export class BackendError extends Error {
-  status: number
-  constructor(message: string, status = 0) {
-    super(message)
-    this.name = 'BackendError'
-    this.status = status
-  }
-}
+export { BackendError } from '@/services/backendError'
 
 /**
  * 会话令牌（微信身份）—— 通过**工厂参数的回调**注入，见 createBackend。
@@ -149,6 +144,41 @@ async function req<T>(
   throw lastErr instanceof Error ? lastErr : new BackendError('请求失败', 0)
 }
 
+/**
+ * 云函数通道的请求：与 `req` 同样的重试策略，但把「路径 + HTTP 方法」换成
+ * 「云函数名 + action」，并把 payload 展开进 event。
+ *
+ * `loggedIn` 由会话令牌现取回调推导 —— 云函数据此决定 openid 是否参与归属判定
+ * （云环境里人人都有 OPENID，但「未登录」的匿名口径必须保留，见 services/cloud.ts）。
+ */
+async function cloudReq<T>(
+  fn: CloudFunctionName,
+  action: string,
+  payload: Record<string, unknown>,
+  opts: { retry?: number; token?: () => string } = {}
+): Promise<T> {
+  const attempts = (opts.retry ?? 0) + 1
+  const token = opts.token || (() => '')
+  let lastErr: unknown
+  for (let i = 0; i < attempts; i += 1) {
+    const session = token()
+    try {
+      return await callCloud<T>(fn, {
+        action,
+        loggedIn: !!session,
+        token: session,
+        ...payload
+      })
+    } catch (e) {
+      lastErr = e
+      const status = e instanceof BackendError ? e.status : 0
+      if (i === attempts - 1 || !worthRetry(status)) break
+      await delay(400 * Math.pow(3, i))
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new BackendError('请求失败', 0)
+}
+
 /** backend 客户端接口（store 按实例各持一份，见 createBackend） */
 export interface BackendClient {
   enabled: boolean
@@ -187,7 +217,9 @@ export function createBackend(opts: BackendOptions = {}): BackendClient {
 
     /** 健康检查（用于「云同步」页展示后端是否可达） */
     health(): Promise<{ ok: boolean; version?: string; authRequired?: boolean }> {
-      return req('GET', '/api/health', undefined, { token })
+      return hasCloud()
+        ? cloudReq('auth', 'health', {})
+        : req('GET', '/api/health', undefined, { token })
     },
 
     // ───────────── 身份 ─────────────
@@ -204,67 +236,87 @@ export function createBackend(opts: BackendOptions = {}): BackendClient {
       expiresAt: number
       dev?: boolean
     }> {
-      return req('POST', '/api/auth/wx', { code }, { token })
+      return hasCloud()
+        ? cloudReq('auth', 'wxLogin', { code }, { token })
+        : req('POST', '/api/auth/wx', { code }, { token })
     },
 
     /** 校验当前会话令牌是否仍然有效 */
     authMe(): Promise<{ openid: string; expiresAt: number }> {
-      return req('GET', '/api/auth/me', undefined, { token })
+      return hasCloud()
+        ? cloudReq('auth', 'authMe', {}, { token })
+        : req('GET', '/api/auth/me', undefined, { token })
     },
 
     // ───────────── 城市攻略 ─────────────
 
     /** 拉取某城市所有共享攻略 */
     getCityGuides(name: string): Promise<{ name: string; guides: CityGuide[] }> {
-      return req('GET', '/api/cities/' + encodeURIComponent(name), undefined, { token, retry: 1 })
+      return hasCloud()
+        ? cloudReq('guides', 'cityGuides', { cityName: name }, { token, retry: 1 })
+        : req('GET', '/api/cities/' + encodeURIComponent(name), undefined, { token, retry: 1 })
     },
 
     /** 拉取全部城市（概览用，可选按状态过滤） */
     getAllCities(status?: CityStatus): Promise<{ cities: { name: string; guides: CityGuide[] }[] }> {
-      return req('GET', '/api/cities' + (status ? '?status=' + status : ''), undefined, {
-        token,
-        retry: 1
-      })
+      return hasCloud()
+        ? cloudReq('guides', 'listCities', status ? { status } : {}, { token, retry: 1 })
+        : req('GET', '/api/cities' + (status ? '?status=' + status : ''), undefined, {
+            token,
+            retry: 1
+          })
     },
 
     /** 拉取我自己的全部足迹（服务端按 openid 归属过滤；登录后回拉 / 换设备恢复用） */
     getMyGuides(): Promise<{ guides: CityGuide[] }> {
-      return req('GET', '/api/my/guides', undefined, { token, retry: 1 })
+      return hasCloud()
+        ? cloudReq('guides', 'listMine', {}, { token, retry: 1 })
+        : req('GET', '/api/my/guides', undefined, { token, retry: 1 })
     },
 
     /** 按 (城市, 作者) upsert 一条攻略 —— 「我的攻略」发布 / 更新 */
     upsertGuide(name: string, payload: CityGuidePayload): Promise<{ guide: CityGuide }> {
-      return req('POST', '/api/cities/' + encodeURIComponent(name) + '/guides', payload, {
-        token,
-        retry: 1
-      })
+      return hasCloud()
+        ? cloudReq('guides', 'upsert', { cityName: name, ...payload }, { token, retry: 1 })
+        : req('POST', '/api/cities/' + encodeURIComponent(name) + '/guides', payload, {
+            token,
+            retry: 1
+          })
     },
 
     /** 按作者撤回：删除我在该城市发布的攻略（删城市时同步撤回） */
     retractGuide(name: string, author: string): Promise<{ ok: boolean; removed: number }> {
-      return req(
-        'DELETE',
-        '/api/cities/' + encodeURIComponent(name) + '/guides?author=' + encodeURIComponent(author),
-        undefined,
-        { token }
-      )
+      return hasCloud()
+        ? cloudReq('guides', 'retract', { cityName: name, author }, { token })
+        : req(
+            'DELETE',
+            '/api/cities/' + encodeURIComponent(name) + '/guides?author=' + encodeURIComponent(author),
+            undefined,
+            { token }
+          )
     },
 
     /** 更新某条攻略 */
     updateGuide(id: string, payload: Partial<CityGuidePayload>): Promise<{ guide: CityGuide }> {
-      return req('PUT', '/api/guides/' + encodeURIComponent(id), payload, { token, retry: 1 })
+      return hasCloud()
+        ? cloudReq('guides', 'update', { id, payload }, { token, retry: 1 })
+        : req('PUT', '/api/guides/' + encodeURIComponent(id), payload, { token, retry: 1 })
     },
 
     /** 删除某条攻略 */
     deleteGuide(id: string): Promise<{ ok: boolean }> {
-      return req('DELETE', '/api/guides/' + encodeURIComponent(id), undefined, { token })
+      return hasCloud()
+        ? cloudReq('guides', 'delete', { id }, { token })
+        : req('DELETE', '/api/guides/' + encodeURIComponent(id), undefined, { token })
     },
 
     // ───────────── 行程空间同步 ─────────────
 
     /** 云端空间列表；withDoc=true 时附带全量文档（首次同步/整体拉取用） */
     listSpaces(withDoc = false): Promise<{ spaces: (TripSpaceBrief | TripSpaceFull)[] }> {
-      return req('GET', '/api/trips' + (withDoc ? '?withDoc=1' : ''), undefined, { token, retry: 1 })
+      return hasCloud()
+        ? cloudReq('trips', 'list', { withDoc }, { token, retry: 1 })
+        : req('GET', '/api/trips' + (withDoc ? '?withDoc=1' : ''), undefined, { token, retry: 1 })
     },
 
     /**
@@ -272,11 +324,16 @@ export function createBackend(opts: BackendOptions = {}): BackendClient {
      * 非 mine 条目服务端已剥 code —— 广场条目不进入本地同步库。
      */
     listDiscoverTrips(): Promise<{ trips: DiscoverTrip[] }> {
-      return req('GET', '/api/trips/discover', undefined, { token, retry: 1 })
+      return hasCloud()
+        ? cloudReq('trips', 'discover', {}, { token, retry: 1 })
+        : req('GET', '/api/trips/discover', undefined, { token, retry: 1 })
     },
 
     /** 逐日天气（服务端代理 Open-Meteo）。GET 幂等，失败由调用方静默降级 */
     getWeather(place: string, start: string, end: string): Promise<WeatherReply> {
+      if (hasCloud()) {
+        return cloudReq('weather', 'weather', { place, start, end }, { token, retry: 1 })
+      }
       const q =
         `place=${encodeURIComponent(place)}` +
         `&start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}`
@@ -284,15 +341,19 @@ export function createBackend(opts: BackendOptions = {}): BackendClient {
     },
 
     getSpace(id: string): Promise<{ space: TripSpaceFull }> {
-      return req('GET', '/api/trips/' + encodeURIComponent(id), undefined, { token, retry: 1 })
+      return hasCloud()
+        ? cloudReq('trips', 'get', { id }, { token, retry: 1 })
+        : req('GET', '/api/trips/' + encodeURIComponent(id), undefined, { token, retry: 1 })
     },
 
     /** 按分享码加入 */
     getSpaceByCode(code: string): Promise<{ space: TripSpaceFull }> {
-      return req('GET', '/api/trips/by-code/' + encodeURIComponent(code), undefined, {
-        token,
-        retry: 1
-      })
+      return hasCloud()
+        ? cloudReq('trips', 'byCode', { code }, { token, retry: 1 })
+        : req('GET', '/api/trips/by-code/' + encodeURIComponent(code), undefined, {
+            token,
+            retry: 1
+          })
     },
 
     /**
@@ -304,7 +365,9 @@ export function createBackend(opts: BackendOptions = {}): BackendClient {
      * 重试只会把用户多等几秒。
      */
     joinSpace(code: string): Promise<{ space: TripSpaceFull; joined: boolean }> {
-      return req('POST', '/api/trips/join', { code }, { token })
+      return hasCloud()
+        ? cloudReq('trips', 'join', { code }, { token })
+        : req('POST', '/api/trips/join', { code }, { token })
     },
 
     /**
@@ -312,7 +375,9 @@ export function createBackend(opts: BackendOptions = {}): BackendClient {
      * 需要出示该行程的分享码 —— 分享码正是旧权限模型下的访问凭证。
      */
     claimSpace(id: string, code: string): Promise<{ ok: boolean }> {
-      return req('POST', '/api/trips/' + encodeURIComponent(id) + '/claim', { code }, { token })
+      return hasCloud()
+        ? cloudReq('trips', 'claim', { id, code }, { token })
+        : req('POST', '/api/trips/' + encodeURIComponent(id) + '/claim', { code }, { token })
     },
 
     /**
@@ -321,14 +386,19 @@ export function createBackend(opts: BackendOptions = {}): BackendClient {
      *
      * @param connId 本机实时连接 id。服务端据此把本连接排除在广播之外 ——
      *   它已经是合并结果的接收方，不需要再收到「这个地方变了，去拉一下吧」。
+     *   云函数通道没有长连接（实时为关闭态），此参数被忽略。
      */
     pushSpace(id: string, payload: PushPayload, connId = ''): Promise<PushResult> {
-      return req('POST', '/api/trips/' + encodeURIComponent(id), payload, { retry: 1, connId, token })
+      return hasCloud()
+        ? cloudReq('trips', 'push', { id, ...payload }, { retry: 1, token })
+        : req('POST', '/api/trips/' + encodeURIComponent(id), payload, { retry: 1, connId, token })
     },
 
     /** 删除云端空间 */
     deleteSpace(id: string, connId = ''): Promise<{ ok: boolean; deleted?: boolean }> {
-      return req('DELETE', '/api/trips/' + encodeURIComponent(id), undefined, { connId, token })
+      return hasCloud()
+        ? cloudReq('trips', 'delete', { id }, { token })
+        : req('DELETE', '/api/trips/' + encodeURIComponent(id), undefined, { connId, token })
     }
   }
 }

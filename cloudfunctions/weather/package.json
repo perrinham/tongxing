@@ -1,0 +1,9 @@
+{
+  "name": "weather",
+  "version": "1.0.0",
+  "description": "同行 · 天气代理云函数（server/routes/weather.mjs 的云端移植）",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "^4.0.2"
+  }
+}

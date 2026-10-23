@@ -1,0 +1,9 @@
+{
+  "name": "auth",
+  "version": "1.0.0",
+  "description": "同行 · 身份云函数（server/routes/auth.mjs 的云端移植）",
+  "main": "index.js",
+  "dependencies": {
+    "wx-server-sdk": "^4.0.2"
+  }
+}

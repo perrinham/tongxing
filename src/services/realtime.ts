@@ -27,6 +27,8 @@
  * 都选择**静默退避重连**，从不抛错、从不阻塞 UI。
  */
 
+import { hasCloud } from '@/services/cloud'
+
 /** 连接状态（给人看 / 给断言用） */
 export type RealtimeStatus = 'disabled' | 'idle' | 'connecting' | 'online' | 'offline' | 'stopped'
 
@@ -125,6 +127,31 @@ export interface RealtimeController {
 }
 
 export function createRealtime(deps: RealtimeDeps): RealtimeController {
+  // 云开发通道下没有自托管的长连接端点（REALTIME_PATH 指向 server/ 的 WS）：
+  // 云函数是请求-响应模型，没有服务端主动推送。此时返回一个「disabled」控制器，
+  // 让调用方（trip store）零改动即可——它本来就把 disabled 当作合法状态。
+  // 一致性不受影响：推送后回拉 + 回到前台 syncAll 仍会收敛（实时本就是加速层）。
+  if (hasCloud()) {
+    return {
+      get status() {
+        return 'disabled' as RealtimeStatus
+      },
+      get connId() {
+        return ''
+      },
+      get lastError() {
+        return ''
+      },
+      start() {},
+      stop() {},
+      restart() {},
+      setSpaces() {},
+      spaces() {
+        return []
+      }
+    }
+  }
+
   const timing: Required<RealtimeTiming> = { ...DEFAULT_TIMING, ...(deps.timing || {}) }
 
   /** 想订阅的空间（即使还没连上也记着，连上后一次性下发） */

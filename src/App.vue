@@ -2,6 +2,7 @@
 import { onLaunch, onShow, onHide, onUnload, onError, onUnhandledRejection } from '@dcloudio/uni-app'
 import { useTripStore } from '@/stores/trip'
 import { SYNC_ENABLED } from '@/config'
+import { initCloud } from '@/services/cloud'
 
 const store = useTripStore()
 
@@ -13,6 +14,9 @@ onError((err) => console.error('[app-err:lifecycle]', err))
 onUnhandledRejection((err) => console.error('[app-err:unhandled-rejection]', err))
 
 onLaunch(() => {
+  // 云开发必须先初始化，之后的 callFunction 才可用。
+  // 非云环境（测试 / H5 / 未配 env id）是安全的空操作，见 services/cloud.ts。
+  initCloud()
   store.load()
   // 已有进行中的行程直接进行程页；否则停留在欢迎页（entryPagePath）
   if (store.activeTripId && store.trips.length) {
