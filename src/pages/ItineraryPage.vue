@@ -829,6 +829,9 @@ function goMap() {
 }
 
 .ci-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 12px;
   font-weight: 600;
   color: var(--brand-deep);
@@ -861,6 +864,9 @@ function goMap() {
 
 .pack-rebuild,
 .pack-build-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 12px;
   font-weight: 600;
   color: var(--brand-deep);
@@ -950,6 +956,9 @@ function goMap() {
 }
 
 .pack-x {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
   font-size: 11px;
   color: var(--text-tertiary);
@@ -976,6 +985,9 @@ function goMap() {
 }
 
 .pack-add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
   font-size: 13px;
   font-weight: 600;
@@ -1236,7 +1248,11 @@ function goMap() {
   color: var(--text-tertiary);
 }
 
+/* ── 共享底座：`.tl-nav`、`.pack-add-btn` 等小圆角钮都有同款居中要求 ── */
 .tl-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 13px;
   font-weight: 500;
   /* 13px 文字 → brand-deep（2.85 → 4.81:1） */

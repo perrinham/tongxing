@@ -723,6 +723,9 @@ onLoad(() => {
 
 .primary-btn {
   flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   height: 48px;
   border-radius: 12px;
   background: var(--brand);
@@ -737,6 +740,9 @@ onLoad(() => {
 
 .ghost-btn {
   flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   height: 48px;
   border-radius: 12px;
   background: var(--bg-subtle);

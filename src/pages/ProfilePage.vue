@@ -517,6 +517,9 @@ const syncTime = computed(() => {
 
 /* 破坏性行：iOS 里放在分组卡最后一行，红字、不填充 */
 .reset-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
   height: 48px;
   font-size: 15px;

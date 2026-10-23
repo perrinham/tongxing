@@ -742,6 +742,11 @@ async function doJoin() {
 
 .base-btn {
   flex: 1;
+  /* 居中：global 的 button 重置剥掉了平台默认居中（新见真机「文字左上」问题），
+     全库的钮一律显式 flex 居中 */
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 9px 0;
   border-radius: var(--radius-md);
   background: var(--bg-page, #f0f0f4);

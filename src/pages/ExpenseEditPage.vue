@@ -675,6 +675,9 @@ function applyFx() {
 }
 
 .q-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   height: 30px;
   padding: 0 14px;
   border-radius: 15px;
@@ -789,6 +792,9 @@ function applyFx() {
 }
 
 .fx-apply {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   height: 44px;
   border-radius: 12px;
   font-size: 15px;
@@ -940,6 +946,9 @@ function applyFx() {
 }
 
 .part-check {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 
@@ -1024,6 +1033,9 @@ function applyFx() {
 }
 
 .fill-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-size: 11px;
   /* 11px 文字：brand 基色 2.85:1 → brand-deep 4.81:1 */
   color: var(--brand-deep);

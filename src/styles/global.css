@@ -49,7 +49,14 @@ body {
    平台默认样式（灰色底、圆角、居中、描边）会直接透出来。
    症状就是：同一个按钮在 H5 上带一圈莫名其妙的绿框，而在小程序里是干净的，
    两端长得不一样，排查时又很难想到是标签名变了。
-   `uni-button` 这个选择器在小程序端永远不会命中，留着无害。 */
+   `uni-button` 这个选择器在小程序端永远不会命中，留着无害。
+
+   ⚠️ **这次重置同时剥掉了平台默认的文字居中**（padding/line-height/text-align
+   全部归零归左）—— 所以**每个按钮类都必须显式声明
+   `display: flex; align-items: center; justify-content: center;`**，
+   否则真机上文字会顶到按钮左上（真机视口小、devtools 里不明显）。
+   借用全局基类的组合钮（btn-primary/btn-ghost/btn-tint/btn-text）不用重设，
+   基类已居中；list-row 一类的行钮沿 flex 行布局即可。 */
 button,
 uni-button {
   font-family: inherit;

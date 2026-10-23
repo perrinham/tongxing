@@ -298,6 +298,9 @@ const durationOptions = [30, 45, 60, 90, 120, 180, 240, 300]
 }
 
 .type {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex: 1;
   height: 42px;
   border-radius: var(--radius-md);
