@@ -386,6 +386,9 @@ function goMembers() {
 }
 
 .seg-b {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex: 1;
   height: 38px;
   border-radius: var(--radius-sm);

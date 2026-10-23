@@ -919,6 +919,9 @@ function applyFx() {
 }
 
 .split-tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   flex: 1;
   height: 34px;
   border-radius: 9px;
