@@ -178,7 +178,10 @@ async function run() {
         </div>
       </div>
 
-      <div v-if="!result">
+      <!-- 流式期间把表单整个折起来：真机视口 ~812，流式卡曾被表单挤到
+           top≈815 全部视口外（devtools 视口 932 才勉强露脸，e2e 读文本
+           测不出视口），打字过程整个发生在屏幕外。 -->
+      <div v-if="!result && !generating">
         <div class="sec-title">
           <h2>这次想要什么</h2>
           <span class="sec-hint">可多选</span>
