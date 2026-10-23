@@ -104,6 +104,11 @@ export interface ItineraryItem {
   note: string
   /** 已打卡 */
   done: boolean
+  /**
+   * 行程核验收讫时间戳（ms），0/缺省 = 待核实。AI 生成的条目先标记，
+   * 用户点「现场确认」后写时间戳走 updateItem 正常盖章参与同步。
+   */
+  verifiedAt?: number
   updatedAt?: number
   /** 本次修改的 HLC，参与云端 LWW 比较；老记录没有则回退用 updatedAt */
   hlc?: Hlc

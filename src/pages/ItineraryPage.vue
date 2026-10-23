@@ -14,6 +14,9 @@ import {
 } from '@/utils/format'
 import { fetchTripWeather } from '@/services/weather'
 import { weatherBrief, type WeatherDay } from '@/utils/weather'
+import { checkItinerary, timeMinOf, kmBetween, type ItinIssue, type RouteLike, type LatLike } from '@/utils/itinCheck'
+import { walkingRoute, drivingRoute } from '@/services/amap'
+import type { ItineraryItem } from '@/types'
 import AppNav from '@/components/AppNav.vue'
 import AppIcon from '@/components/AppIcon.vue'
 import AppAvatar from '@/components/AppAvatar.vue'
@@ -109,6 +112,108 @@ watch(
 )
 
 const weatherOf = (date: string): WeatherDay | null => weatherMap.value.get(date) || null
+
+// ── 行程核验：AI 草稿边顺不边顺，跑一遍规则才知道。
+//    结果只算不存（不进同步），verifiedAt 才是唯一的持久化字段。 ──
+const routeCache = new Map<string, RouteLike | null>()
+const allIssues = ref<ItinIssue[]>([])
+const showIssues = ref(false)
+let checkSeq = 0
+
+/** 高德步行/驾车：短途步行、长途自驾；kmBetween 复用校验器的几何（避免重复引入） */
+async function amapRouteFetch(from: LatLike, to: LatLike): Promise<RouteLike | null> {
+  const a = { latitude: from.lat, longitude: from.lng }
+  const b = { latitude: to.lat, longitude: to.lng }
+  try {
+    const r = kmBetween(from, to) > 8 ? await drivingRoute(a, b) : await walkingRoute(a, b)
+    return r ? { distance: r.distance, duration: r.duration } : null
+  } catch {
+    return null // amap 出错就降级：不出 tight 结果，不打扰主线
+  }
+}
+
+/** 编辑触发重算：签名覆盖影响任一规则的字段 */
+const checkSig = computed(() => {
+  if (!trip.value) return ''
+  const parts = store
+    .itemsOf(trip.value.id)
+    .map((i) => `${i.id}|${i.dayId}|${i.time}|${i.duration}|${i.order}|${i.type}|${i.lat}|${i.lng}|${i.cost}|${i.title}`)
+  return [trip.value.id, days.value.length, ...parts].join(';')
+})
+
+async function runChecks() {
+  const id = trip.value?.id
+  if (!id) {
+    allIssues.value = []
+    return
+  }
+  const seq = ++checkSeq
+  const found = await checkItinerary(store.itemsOf(id), {
+    route: amapRouteFetch,
+    routeCache
+  })
+  if (!alive || seq !== checkSeq) return // 页面已卸载 / 已有更新的重算
+  allIssues.value = found
+}
+
+watch(checkSig, runChecks, { immediate: true })
+
+/** item.id → 挂在这条上的问题们（模板里用于角标） */
+const issuesByItem = computed(() => {
+  const map = new Map<string, ItinIssue[]>()
+  for (const issue of allIssues.value) {
+    for (const id of issue.itemIds) {
+      const arr = map.get(id)
+      if (arr) arr.push(issue)
+      else map.set(id, [issue])
+    }
+  }
+  return map
+})
+
+const issueCount = computed(() => allIssues.value.length)
+const errorCount = computed(() => allIssues.value.filter((i) => i.level === 'error').length)
+
+/** 问题列表里的 D1/D2 标签 */
+function dayLabelOf(dayId: string): string {
+  const d = days.value.find((x) => x.id === dayId)
+  return d ? `D${d.index + 1}` : ''
+}
+
+function markVerified(id: string) {
+  const it = store.items.find((i) => i.id === id)
+  if (!it || it.verifiedAt) return
+  store.updateItem(id, { verifiedAt: Date.now() })
+  uni.showToast({ title: '已记录现场确认', icon: 'none' })
+}
+
+/** R3/tight 的一键修法：在两项之间补一段交通 */
+function insertTransport(issue: ItinIssue) {
+  const a = store.items.find((i) => i.id === issue.itemIds[0])
+  const b = store.items.find((i) => i.id === issue.itemIds[1])
+  const host = a || b
+  if (!host) return
+  const dayId = a?.dayId || b!.dayId
+  const aEnd = a ? timeMinOf(a.time) : null
+  const bStart = b ? timeMinOf(b.time) : null
+  // 默认 30 分钟；两端都有合法时间就按实际间隔塞（10–120 分钟）
+  let duration = 30
+  if (aEnd != null && bStart != null && !Number.isNaN(aEnd) && !Number.isNaN(bStart)) {
+    duration = Math.min(120, Math.max(10, bStart - (aEnd + a!.duration)))
+  }
+  const startOk = a && aEnd != null && !Number.isNaN(aEnd)
+  const startTime = startOk ? endTime(a!.time, a!.duration) : b?.time || '10:00'
+  store.addItem(dayId, {
+    type: 'transport',
+    title: `交通衔接（→ ${b?.title || '下一站'}）`,
+    time: startTime,
+    duration,
+    cost: 0,
+    note: issue.title
+  })
+  uni.showToast({ title: '已插入交通衔接', icon: 'none' })
+}
+
 
 function goPolls() {
   if (trip.value) nav.to('poll', { id: trip.value.id })
@@ -265,6 +370,16 @@ function goMap() {
             <AppIcon name="right" :size="15" color="var(--text-tertiary)" />
           </button>
           <div class="list-sep" />
+          <button class="list-row" @click="showIssues = true">
+            <AppIcon name="check" :size="18" color="var(--text-secondary)" />
+            <span class="pad">行程核验</span>
+            <span class="grow" />
+            <span v-if="errorCount" class="vflag err">{{ errorCount }} 处冲突</span>
+            <span v-else-if="issueCount" class="vflag warn">{{ issueCount }} 条待核实</span>
+            <span v-else class="vflag okv">已核实</span>
+            <AppIcon name="right" :size="15" color="var(--text-tertiary)" />
+          </button>
+          <div class="list-sep" />
           <div class="list-row">
             <span class="grow">预估价</span>
             <span class="num est-num">{{ moneyBrief(tripEstimate, trip.currency) }}</span>
@@ -351,6 +466,14 @@ function goMap() {
                   <span v-if="it.cost > 0" class="tl-meta-item num">
                     {{ moneyBrief(it.cost, trip.currency) }}/人
                   </span>
+                  <button
+                    v-if="issuesByItem.get(it.id)"
+                    class="vflag warn tl-vchip"
+                    @click.stop="showIssues = true"
+                  >
+                    待核实
+                  </button>
+                  <span v-else-if="it.verifiedAt" class="vflag okv tl-vchip">已核实</span>
                   <span v-if="it.done" class="tint neutral">已打卡</span>
                   <span class="grow" />
                   <button
@@ -385,6 +508,41 @@ function goMap() {
       </div>
     </template>
 
+    <!-- 行程核验面板：列出全行程问题（带 D1/D2 定位），支持现场确认与一键补交通 -->
+    <AppSheet v-model="showIssues" title="行程核验">
+      <div v-if="!allIssues.length" class="check-empty">全行程都没查出问题 ✓</div>
+      <div v-else class="check-list">
+        <div v-for="(x, idx) in allIssues" :key="idx" class="check-item">
+          <div class="ci-head">
+            <span class="ci-day num">{{ dayLabelOf(x.dayId) }}</span>
+            <span class="ci-kind" :class="x.level === 'error' ? 'err' : 'warn'">
+              {{ x.level === 'error' ? '冲突' : '核实' }}
+            </span>
+            <p class="ci-title">{{ x.title }}</p>
+          </div>
+          <p class="ci-hint">{{ x.hint }}</p>
+          <div class="ci-acts">
+            <button
+              v-if="x.rule === 'gap' || x.rule === 'tight'"
+              class="ci-btn"
+              @click="insertTransport(x)"
+            >
+              插入交通
+            </button>
+            <button
+              v-for="id in x.itemIds"
+              :key="id"
+              class="ci-btn ghost"
+              :disabled="store.items.find((i) => i.id === id)?.verifiedAt ? true : false"
+              @click="markVerified(id)"
+            >
+              {{ store.items.find((i) => i.id === id)?.verifiedAt ? '已现场确认' : '现场确认' }}
+            </button>
+          </div>
+        </div>
+      </div>
+    </AppSheet>
+
     <AppSheet v-model="showActions" :title="activeItem?.title || ''">
       <div class="acts">
         <button class="act" @click="toggleDone">
@@ -415,6 +573,127 @@ function goMap() {
 </template>
 
 <style scoped>
+/* ── 行程核验 ─────────────────────────────────────────── */
+.vflag {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  font-size: 12px;
+  line-height: 1;
+  padding: 5px 9px;
+  border-radius: 999px;
+  font-weight: 500;
+}
+
+.vflag.warn {
+  color: var(--warn-deep);
+  background: var(--warn-soft);
+}
+
+.vflag.err {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.vflag.okv {
+  color: var(--brand-deep);
+  background: var(--brand-soft);
+}
+
+.tl-vchip {
+  margin-right: 8px;
+}
+
+.check-empty {
+  padding: 14px 2px 6px;
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 2px 8px;
+}
+
+.check-item {
+  padding: 12px;
+  background: var(--bg-subtle);
+  border-radius: 12px;
+}
+
+.ci-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ci-day {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--brand-deep);
+  background: var(--bg-card);
+  padding: 3px 7px;
+  border-radius: 8px;
+}
+
+.ci-kind {
+  flex-shrink: 0;
+  font-size: 11px;
+  padding: 3px 7px;
+  border-radius: 8px;
+}
+
+.ci-kind.warn {
+  color: var(--warn-deep);
+  background: var(--warn-soft);
+}
+
+.ci-kind.err {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.ci-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.ci-hint {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.ci-acts {
+  margin-top: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ci-btn {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand-deep);
+  background: var(--bg-card);
+  padding: 7px 12px;
+  border-radius: 10px;
+}
+
+.ci-btn.ghost {
+  color: var(--text-secondary);
+}
+
+.ci-btn[disabled] {
+  opacity: 0.55;
+}
+
 .ov-list {
   margin-top: 4px;
 }

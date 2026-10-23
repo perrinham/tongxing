@@ -7,6 +7,7 @@ import { moneyBrief, shortDate, weekday, itemMetaOf, categoryMetaOf } from '@/ut
 import AppNav from '@/components/AppNav.vue'
 import AppEmpty from '@/components/AppEmpty.vue'
 import AppIcon from '@/components/AppIcon.vue'
+import { checkItinerary, type ItinIssue } from '@/utils/itinCheck'
 import type { Day, TripSpaceFull } from '@/types'
 
 const store = useTripStore()
@@ -58,6 +59,10 @@ function goEdit() {
   nav.replace('itinerary')
 }
 
+// ── 只读页的核验摘要：纯零成本规则收尾（不注入 route，绝不因浏览而出网）──
+const issues = ref<ItinIssue[]>([])
+const badIds = ref<Set<string>>(new Set())
+
 onLoad(async (options: Record<string, any> | undefined) => {
   const id = String(options?.id || '')
   if (!id) {
@@ -69,6 +74,11 @@ onLoad(async (options: Record<string, any> | undefined) => {
     const r = await store.api().getSpace(id)
     if (!alive) return
     space.value = r.space
+    // 校验失败不阻塞浏览，静默空列表即可
+    const found = await checkItinerary(r.space.doc.items || [])
+    if (!alive) return
+    issues.value = found
+    badIds.value = new Set(found.flatMap((x) => x.itemIds))
   } catch (e) {
     if (!alive) return
     errorText.value = e instanceof Error ? e.message : '加载失败'
@@ -114,6 +124,10 @@ onLoad(async (options: Record<string, any> | undefined) => {
           <p v-if="totalSpend > 0" class="ov-spend">
             已记 {{ moneyBrief(totalSpend, trip?.currency) }}
           </p>
+          <p v-if="issues.length" class="ov-check bad">
+            {{ issues.length }} 处值得核验 · 进入编辑看详情
+          </p>
+          <p v-else class="ov-check ok">行程校验通过 ✓</p>
           <p class="ov-readonly">
             <AppIcon name="location" :size="13" color="var(--brand)" />
             只读浏览 · 来自「发现」广场
@@ -148,6 +162,7 @@ onLoad(async (options: Record<string, any> | undefined) => {
                 <p class="it-title">{{ it.title }}</p>
                 <p v-if="it.address" class="it-addr">{{ it.address }}</p>
               </div>
+              <span v-if="badIds.has(it.id)" class="it-flag">待核实</span>
               <span v-if="it.cost > 0" class="it-cost num">
                 {{ moneyBrief(it.cost, trip?.currency) }}
               </span>
@@ -243,6 +258,29 @@ onLoad(async (options: Record<string, any> | undefined) => {
   gap: 4px;
   font-size: 11px;
   color: var(--text-tertiary);
+}
+
+.ov-check {
+  margin-top: 10px;
+  text-align: center;
+  font-size: 12px;
+}
+
+.ov-check.ok {
+  color: var(--brand-deep);
+}
+
+.ov-check.bad {
+  color: var(--warn-deep);
+}
+
+.it-flag {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: var(--warn-deep);
+  background: var(--warn-soft);
 }
 
 .edit-btn {
