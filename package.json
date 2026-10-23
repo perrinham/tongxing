@@ -25,6 +25,7 @@
     "devtools": "node scripts/open-devtools.mjs",
     "devtools:build": "npm run build:mp-weixin && node scripts/open-devtools.mjs",
     "e2e:keypad": "node scripts/expense-keypad-e2e.mjs",
+    "e2e:capture": "node scripts/quick-capture-e2e.mjs",
     "appid": "node scripts/set-appid.mjs",
     "wxss:lint": "node scripts/lint-wxss.mjs",
     "check:tokens": "node scripts/check-token-sync.mjs",
