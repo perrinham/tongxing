@@ -249,3 +249,51 @@ export async function drivingRoute(origin: LatLng, destination: LatLng): Promise
     return null
   }
 }
+
+/**
+ * 周边检索（v3/place/around）—— 行程项「附近的吃」推荐用。
+ * 与 place/text 同一套 key 与限流封装；distance 单位米（API 原样返回）。
+ */
+export interface NearbyPoi {
+  name: string
+  address: string
+  /** 距检索锚点（行程项位置）的直线距离，公里 */
+  distKm: number
+  /** 高德评分 0-5，无评分时不带 */
+  rating?: number
+}
+
+export async function searchAround(
+  lng: number,
+  lat: number,
+  opts: { keywords?: string; types?: string; radius?: number; limit?: number } = {}
+): Promise<NearbyPoi[]> {
+  if (!AMAP_ENABLED) return []
+  const params: Record<string, string> = {
+    location: `${lng.toFixed(6)},${lat.toFixed(6)}`,
+    radius: String(opts.radius ?? 1500),
+    sortrule: 'distance',
+    offset: String(opts.limit ?? 12),
+    page: '1',
+    extensions: 'all'
+  }
+  if (opts.keywords?.trim()) params.keywords = opts.keywords
+  if (opts.types?.trim()) params.types = opts.types
+  if (!params.keywords && !params.types) return []
+  try {
+    const data = await req<{ pois: any[] }>('/v3/place/around', params)
+    return (data.pois || [])
+      .map((p) => {
+        const rating = Number(p.biz_ext && typeof p.biz_ext === 'object' ? p.biz_ext.rating : NaN)
+        return {
+          name: p.name,
+          address: p.address || '',
+          distKm: Number(p.distance) / 1000 || 0,
+          rating: Number.isFinite(rating) && rating > 0 ? rating : undefined
+        } as NearbyPoi
+      })
+      .filter((x) => !!x.name)
+  } catch {
+    return [] // 失败静默：推荐只是锦上添花，不能变成报错
+  }
+}

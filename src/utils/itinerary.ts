@@ -27,11 +27,6 @@ export function isWetDayCode(code: number): boolean {
   return code >= 51 && code < 100
 }
 
-/** 该城市是否在本地经典路线库里（在线库城市没有攻略兜底） */
-function guideHasPlan(city: CitySeed): boolean {
-  return !!getGuide(city.name)
-}
-
 export type PaceLevel = 'relax' | 'normal' | 'packed'
 
 export interface GenerateInput {
@@ -306,11 +301,11 @@ function adaptWeather(
   })
 }
 
-/** 取打分表里还没被用过的点 */
+/** 取打分表里还没被用过的点。餐饮不进行程（改成行程项详情页的「附近推荐」，见 services/snacks.ts） */
 function queue2(scored: { poi: PoiSeed }[], plan: PoiSeed[][]): PoiSeed[] {
   const used = new Set<string>()
   plan.flat().forEach((p) => used.add(p.name))
-  return scored.map((x) => x.poi).filter((p) => !used.has(p.name))
+  return scored.map((x) => x.poi).filter((p) => !used.has(p.name) && p.type !== 'food')
 }
 
 type PlanPace = { start: string; perDay: number }
@@ -340,7 +335,6 @@ function ruleEnginePlan(
   const dayTrips = scored.filter((x) => x.poi.dayTrip).map((x) => x.poi)
   const locals = scored.filter((x) => !x.poi.dayTrip).map((x) => x.poi)
   const spots = locals.filter((p) => p.type === 'spot')
-  const foods = locals.filter((p) => p.type === 'food')
 
   const maxDayTrips = Math.min(dayTrips.length, Math.max(1, Math.floor(totalDays / 3)))
   const usedDayTrips = dayTrips.slice(0, totalDays >= 3 ? maxDayTrips : 0)
@@ -367,10 +361,9 @@ function ruleEnginePlan(
     const morningMust = spots.find((p) => p.best === 'morning')
     const spotPool = spots.filter((p) => p !== morningMust)
     const queue: PoiSeed[] = morningMust ? [morningMust, ...spotPool] : [...spotPool]
-    // 每天景点槽位：本地库按 perDay-1 就够（餐饮会补位）；
-    // 在线库没有「经典路线」兜底，景点就是行程主体，槽位放宽到 perDay 全额
-    const isOnline = !guideHasPlan(city)
-    const spotPerDay = isOnline ? pace.perDay : Math.max(1, pace.perDay - 1)
+    // 每天景点槽位：餐饮不进行程后，位置全让给景点（perDay 全额）；
+    // 攻略/本地/在线三路统一
+    const spotPerDay = pace.perDay
 
     // —— 种子：给每天定一个地理重心（高分优先 + 空间分散） ——
     // morningMust 是必去，永远当第 0 天的种子；其余天按「与已有种子最远」选种，
@@ -430,50 +423,10 @@ function ruleEnginePlan(
     }
   }
 
-  // —— 餐饮就近且顺路：插入位置选「路径增量最小」的两点之间 ——
-  const insertFood = (current: PoiSeed[], f: PoiSeed) => {
-    if (current.length <= 1) {
-      current.push(f)
-      return
-    }
-    let bestAt = -1
-    let bestCost = Infinity
-    for (let j = 0; j < current.length; j += 1) {
-      // 插在 j 之后的代价 = dist(j,f) + dist(f,j+1) - dist(j,j+1)（桥头拆开重接的增量）
-      const a = current[j]
-      const b = current[j + 1]
-      const add =
-        distanceKm(a, f) + (b ? distanceKm(f, b) : 0) - (b ? distanceKm(a, b) : 0)
-      if (add < bestCost) {
-        bestCost = add
-        bestAt = j
-      }
-    }
-    current.splice(bestAt + 1, 0, f)
-  }
-
-  const foodPool = [...foods]
-  for (let dayIdx = 0; dayIdx < totalDays; dayIdx += 1) {
-    if (dayTripDaySet.has(dayIdx) && plan[dayIdx].length === 1) continue
-    const current = plan[dayIdx]
-    if (!current.length) continue
-    const need = Math.min(2, Math.max(1, Math.round(pace.perDay / 2)))
-    for (let n = 0; n < need && foodPool.length; n += 1) {
-      let bestIdx = 0
-      let bestDist = Infinity
-      foodPool.forEach((f, k) => {
-        const d = Math.min(...current.map((a) => distanceKm(a, f)))
-        if (d < bestDist) {
-          bestDist = d
-          bestIdx = k
-        }
-      })
-      insertFood(current, foodPool[bestIdx])
-      foodPool.splice(bestIdx, 1)
-    }
-  }
-
-  const leftover = [...foodPool, ...queue2(scored, plan)]
+  // 餐饮不再进行程：用户定的交互 —— 时间轴只放正事，吃的按「位置 + 时段」
+  // 现查现推（行程项详情页的「附近的吃」，见 services/snacks.ts）。
+  // 位置槽位全让给景点，多余的低分景点照旧留空不硬塞。
+  const leftover = [...queue2(scored, plan)]
   for (let dayIdx = 0; dayIdx < totalDays; dayIdx += 1) {
     if (plan[dayIdx].length === 0 && leftover.length) {
       const take = leftover.splice(0, pace.perDay)
@@ -491,7 +444,8 @@ function guidePlan(city: CitySeed, guide: CityGuide, totalDays: number, pace: Pl
   guide.days.slice(0, totalDays).forEach((gd, i) => {
     gd.pois.forEach((name) => {
       const seed = byName.get(name)
-      if (seed) plan[i].push(seed)
+      // 餐饮不进行程（改行程项详情页「附近推荐」）；正文里的餐馆名仅在 summary 里占位
+      if (seed && seed.type !== 'food') plan[i].push(seed)
     })
   })
   // 攻略天数不够：剩余 POI 按节奏补满额外天

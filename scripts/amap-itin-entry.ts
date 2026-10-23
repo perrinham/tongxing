@@ -4,7 +4,7 @@
  * 断言点：
  * 1. 本地 6 城（成都）走精修库 + 经典路线，行为不回归
  * 2. 陌生城市（长沙）走高德在线库：能出多天计划、天数正确、
- *    有景点有餐饮、坐标落在目的地城市范围内
+ *    以景点为主（餐饮不进行程项）、坐标落在目的地城市范围内
  * 3. 完全断网时：陌生城市**明确抛错**（不静默回退成别的城市），
  *    内置城市照常出计划（走本地精修库，本就不需要网络）
  */
@@ -48,12 +48,11 @@ const cs = await generateItineraryAsync({ destination: '长沙', ...BASE_INPUT }
 const elapsed = Date.now() - t0
 
 ok(cs.days.length === 3, '3 天计划', cs.days.length)
-ok(cs.items.length >= 10, `行程项充足（${cs.items.length} 个）`, cs.items.length)
+ok(cs.items.length >= 9, `行程项充足（${cs.items.length} 个，餐饮已不进行程）`, cs.items.length)
 
 const spots = cs.items.filter((i) => i.type === 'spot')
-const foods = cs.items.filter((i) => i.type === 'food')
-ok(spots.length >= 6, `景点足够（${spots.length} 个）`, spots.length)
-ok(foods.length >= 3, `餐饮足够（${foods.length} 个）`, foods.length)
+ok(spots.length >= 9, `景点足够（${spots.length} 个）`, spots.length)
+ok(cs.items.every((i) => i.type !== 'food'), '餐饮不进行程时间轴（改行程项详情页「附近推荐」）')
 
 // 坐标落在长沙（市中心 112.94,28.23 附近 80km 内）
 const CENTER = { lng: 112.94, lat: 28.23 }

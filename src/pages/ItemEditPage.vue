@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { useTripStore } from '@/stores/trip'
 import { nav } from '@/utils/nav'
 import { ITEM_TYPE_META, ITEM_TYPE_ORDER, endTime, moneyBrief } from '@/utils/format'
 import type { ItemType } from '@/types'
+import type { NearbyPoi } from '@/services/amap'
+import { SNACK_SLOT_LABELS, nearbySnacks, snackSlotFor, type SnackSlot } from '@/services/snacks'
 import AppNav from '@/components/AppNav.vue'
 import AppIcon from '@/components/AppIcon.vue'
 
@@ -68,6 +70,8 @@ onLoad((options: Record<string, any> | undefined) => {
   durationText.value = it.duration ? String(it.duration) : '90'
   note.value = it.note
   done.value = it.done
+  // 坐标齐就行首刷（无坐标的行程项整个不显示推荐区）
+  void refreshSnacks()
 })
 
 function save() {
@@ -108,6 +112,40 @@ function onTimeChange(e: { detail: { value: string } }) {
 }
 
 const durationOptions = [30, 45, 60, 90, 120, 180, 240, 300]
+
+/* ── 附近的吃：餐饮不进行程时间轴（用户定的口径），按「这个点的位置 + 当前
+   时间段」现查现推 —— 9 点的静安寺推早餐/咖啡，12 点推午餐。
+   任何失败都静默（区块整个不出现），推荐永远不能变成报错。 ── */
+const snacks = ref<NearbyPoi[]>([])
+const snackSlot = computed(() => snackSlotFor(time.value))
+let snackSeq = 0
+
+function distBrief(km: number): string {
+  return km < 1 ? `${Math.round(km * 1000)}m` : `${km.toFixed(1)}km`
+}
+
+async function refreshSnacks(): Promise<void> {
+  const it = item.value
+  if (!it || !it.lat || !it.lng) {
+    snacks.value = []
+    return
+  }
+  const seq = ++snackSeq
+  const slot = snackSlot.value
+  const list = await nearbySnacks(it.lng, it.lat, slot).catch(() => [])
+  // 迟到的响应不许覆盖新时段的结果（时间被改到别的时段时）
+  if (seq === snackSeq && snackSlot.value === slot) snacks.value = list
+}
+
+// 时段变了（用户改了时间）就换推荐的品类；坐标固定于行程项，不用盯
+watch(snackSlot, () => void refreshSnacks())
+
+/** 把推荐写进备注：一键「顺便：xxx」，同一个店不重复写 */
+function appendSnack(s: NearbyPoi): void {
+  const t = `顺便：${s.name}`
+  if (note.value.includes(t)) return
+  note.value = (note.value ? `${note.value.replace(/[;；\s]+$/, '')}；${t}` : t).slice(0, 120)
+}
 </script>
 
 <template>
@@ -202,6 +240,26 @@ const durationOptions = [30, 45, 60, 90, 120, 180, 240, 300]
         </p>
       </div>
 
+      <div v-if="snacks.length" class="sec-title">
+        <h2>附近的吃</h2>
+        <span class="sec-hint">{{ time }} · {{ SNACK_SLOT_LABELS[snackSlot] }}</span>
+      </div>
+      <div v-if="snacks.length" class="card snack-card">
+        <button
+          v-for="s in snacks"
+          :key="s.name"
+          class="snack-row"
+          @click="appendSnack(s)"
+        >
+          <span class="snack-name">{{ s.name }}</span>
+          <span class="snack-meta">
+            {{ s.rating ? `${s.rating.toFixed(1)}分 · ` : '' }}{{ distBrief(s.distKm) }}
+          </span>
+          <span class="snack-add">＋备注</span>
+        </button>
+        <p class="snack-foot">点一下写进备注；行程里只放正事，吃饭按位置现查。</p>
+      </div>
+
       <div class="sec-title">
         <h2>备注</h2>
       </div>
@@ -235,6 +293,60 @@ const durationOptions = [30, 45, 60, 90, 120, 180, 240, 300]
 </template>
 
 <style scoped>
+/* ── 附近的吃 ── 行按钮不居中（左对齐文本行），但按钮类必须显式 flex
+   （global 的 button 重置剥掉了平台默认居中）── */
+.snack-card {
+  padding: 4px 14px 8px;
+}
+
+.snack-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line, #eee);
+  text-align: left;
+}
+
+.snack-row:active {
+  opacity: 0.7;
+}
+
+.snack-row:last-of-type {
+  border-bottom: none;
+}
+
+.snack-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 15px;
+  color: var(--text-primary);
+}
+
+.snack-meta {
+  margin-left: 10px;
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.snack-add {
+  margin-left: 10px;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand-deep);
+}
+
+.snack-foot {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
 .day-hint {
   font-size: 12px;
   color: var(--text-tertiary);
