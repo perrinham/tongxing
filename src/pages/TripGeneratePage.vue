@@ -6,10 +6,16 @@ import { nav } from '@/utils/nav'
 import { PREF_OPTIONS, type PaceLevel, type GenStage, type GenStageInfo } from '@/utils/itinerary'
 import { isKnownCity } from '@/data/poi'
 import { fetchTripWeather } from '@/services/weather'
+import { useCityStore } from '@/stores/city'
+import { computeTaste } from '@/utils/taste'
 import AppNav from '@/components/AppNav.vue'
 import AppIcon from '@/components/AppIcon.vue'
 
 const store = useTripStore()
+const cityStore = useCityStore()
+
+/** 从足迹推断的口味画像（样本 <2 时 brief 为空、生成时不加权，风格选择器不干扰） */
+const taste = computed(() => computeTaste(cityStore.passports))
 
 const tripId = ref('')
 const pace = ref<PaceLevel>('normal')
@@ -151,7 +157,7 @@ async function run() {
         peopleCount: store.membersOf(tripId.value).length,
         prefs: prefs.value,
         pace: pace.value
-      }, onStage, { weather: weatherSrc })
+      }, onStage, { weather: weatherSrc, taste: taste.value })
       await drainStream()
       result.value = summary
       // 用户若已手动返回，不再强制拉回行程页
@@ -195,6 +201,7 @@ async function run() {
           <h2>这次想要什么</h2>
           <span class="sec-hint">可多选</span>
         </div>
+        <p v-if="taste.brief" class="taste-hint">按你的足迹：{{ taste.brief }}</p>
         <div class="card">
           <div class="pref-grid">
             <button
@@ -277,6 +284,13 @@ async function run() {
 </template>
 
 <style scoped>
+/* 足迹口味画像提示（纯文本，无按钮不涉及居中口径） */
+.taste-hint {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
 .trip-card {
   margin-top: 8px;
 }

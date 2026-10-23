@@ -24,6 +24,7 @@ import { uid } from '@/utils/id'
 import { useCityStore } from '@/stores/city'
 import { addDays, daysBetween, todayISO, avatarColor } from '@/utils/format'
 import { generateItinerary, generateItineraryAsync, type GenerateInput, type GenerateOutput, type GenStageSink } from '@/utils/itinerary'
+import type { Taste } from '@/utils/taste'
 import { buildPackingList } from '@/utils/packing'
 import { tallyOf, type PollTally } from '@/utils/poll'
 import { settle as runSettle } from '@/utils/settlement'
@@ -1043,7 +1044,11 @@ export const useTripStore = defineStore('trip', {
       tripId: string,
       input: GenerateInput,
       onStage?: GenStageSink,
-      opts?: { weather?: Map<string, WeatherDay> | Promise<Map<string, WeatherDay> | undefined> }
+      opts?: {
+        weather?: Map<string, WeatherDay> | Promise<Map<string, WeatherDay> | undefined>
+        /** 口味画像（utils/taste，从足迹推断），样本 ≥2 才生效 */
+        taste?: Taste
+      }
     ): Promise<string> {
       const trip = this.trips.find((t) => t.id === tripId)
       if (!trip) return ''

@@ -6,6 +6,7 @@ import { buildCityFromAmap } from '@/services/cityPoi'
 import { uid } from '@/utils/id'
 import { addDays, daysBetween } from '@/utils/format'
 import { isIndoorPoi } from '@/utils/indoor'
+import { tasteBoost, type Taste } from '@/utils/taste'
 
 /** 生成入口的附加选项 */
 export interface GenOpts {
@@ -15,6 +16,11 @@ export interface GenOpts {
    * 异步入口可直接给 Promise（页面用「天气请求 + 生成请求并发」省一跳延迟）。
    */
   weather?: Map<string, WeatherDay> | Promise<Map<string, WeatherDay> | undefined>
+  /**
+   * 口味画像（utils/taste 从足迹推断）。样本 ≥2 才生效：选点温和加权，
+   * 不碰地理聚类；攻略（真人玩法）模式不参与。
+   */
+  taste?: Taste
   /**
    * 测试注入口：直接喂合成城市，跳过 matchCity（matchCity 对未知地名会兜底
    * CITIES[0]，用它构造的合成城市根本进不了排程）。仅同步入口认这个字段。
@@ -139,7 +145,7 @@ export type GenStageSink = (stage: GenStage, info: GenStageInfo) => void
 export function generateItinerary(
   input: GenerateInput,
   onStage?: GenStageSink,
-  opts?: { weather?: Map<string, WeatherDay>; city?: CitySeed }
+  opts?: { weather?: Map<string, WeatherDay>; taste?: Taste; city?: CitySeed }
 ): GenerateOutput {
   const city = opts?.city ?? matchCity(input.destination)
   const known = opts?.city ? true : isKnownCity(input.destination)
@@ -147,7 +153,7 @@ export function generateItinerary(
   const pace = PACE_SLOTS[input.pace] || PACE_SLOTS.normal
   const prefs = input.prefs || []
 
-  return assemble(city, known, input, totalDays, pace, prefs, onStage, opts?.weather)
+  return assemble(city, known, input, totalDays, pace, prefs, onStage, opts?.weather, opts?.taste)
 }
 
 /**
@@ -185,7 +191,7 @@ export async function generateItineraryAsync(
       )
     })
     if (online) {
-      const out = assemble(online, true, input, totalDays, pace, prefs, onStage, weather)
+      const out = assemble(online, true, input, totalDays, pace, prefs, onStage, weather, opts?.taste)
       return out
     }
     // 在线抓取失败（断网/限流/地名检索质量差）：明确报错让用户重试。
@@ -197,7 +203,7 @@ export async function generateItineraryAsync(
   }
 
   const city = matchCity(input.destination)
-  return assemble(city, known, input, totalDays, pace, prefs, onStage, weather)
+  return assemble(city, known, input, totalDays, pace, prefs, onStage, weather, opts?.taste)
 }
 
 /** 组装：选攻略/规则引擎排布 -> 天气适配 -> 生成天与行程项 -> 交代策略 */
@@ -209,7 +215,8 @@ function assemble(
   pace: { start: string; perDay: number },
   prefs: string[],
   onStage?: GenStageSink,
-  weather?: Map<string, WeatherDay>
+  weather?: Map<string, WeatherDay>,
+  taste?: Taste
 ): GenerateOutput {
   // indoor 统一推断：内置库没标，在线库也没标 —— 一把尺子（utils/indoor）在装配口统一量
   const marked: CitySeed = {
@@ -237,7 +244,7 @@ function assemble(
   onStage?.('plan', { days: totalDays })
   const plan: PoiSeed[][] = guide
     ? guidePlan(marked, guide, totalDays, pace)
-    : ruleEnginePlan(marked, totalDays, pace, prefs)
+    : ruleEnginePlan(marked, totalDays, pace, prefs, taste)
 
   // 攻略模式：用主题作当天标题，提示写入 day.note
   if (guide) {
@@ -263,7 +270,7 @@ function assemble(
   const items: ItineraryItem[] = itemsFromPlan(plan, days, city.name, pace)
   onStage?.('timeline', { count: items.length })
 
-  const summary = buildSummary(marked.name, totalDays, input.pace, prefs, items, known, input.destination, guide)
+  const summary = buildSummary(marked.name, totalDays, input.pace, prefs, items, known, input.destination, guide, taste)
   return { days, items, summary }
 }
 
@@ -326,10 +333,11 @@ function ruleEnginePlan(
   city: CitySeed,
   totalDays: number,
   pace: PlanPace,
-  prefs: string[]
+  prefs: string[],
+  taste?: Taste
 ): PoiSeed[][] {
   const scored = city.pois
-    .map((p) => ({ poi: p, score: scorePoi(p, prefs) }))
+    .map((p) => ({ poi: p, score: scorePoi(p, prefs) + tasteBoost(p, taste) }))
     .sort((a, b) => b.score - a.score)
 
   const dayTrips = scored.filter((x) => x.poi.dayTrip).map((x) => x.poi)
@@ -516,7 +524,8 @@ function buildSummary(
   items: ItineraryItem[],
   known: boolean,
   rawInput: string,
-  guide?: CityGuide | null
+  guide?: CityGuide | null,
+  taste?: Taste
 ): string {
   const prefLabels = prefs
     .map((p) => PREF_OPTIONS.find((o) => o.key === p)?.label)
@@ -524,6 +533,8 @@ function buildSummary(
     .join('、')
   const parts = [`按${city} ${daysCount} 天、${PACE_LABEL[pace]}节奏生成`]
   if (prefLabels) parts.push(`偏好：${prefLabels}`)
+  // 个性化画像起效时向用户交代（没交代会像「随机改了行程」；样本不足时 brief 为空不出现）
+  if (taste?.brief) parts.push(`按你的足迹：${taste.brief}`)
   const source = guide ? ` · 参考${guide.source}` : ''
   parts.push(`共 ${items.length} 个安排${source}`)
   if (!known) {

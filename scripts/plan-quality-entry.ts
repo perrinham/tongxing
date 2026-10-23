@@ -2,17 +2,19 @@
  * 排程质量单测入口 —— 由 scripts/plan-quality-test.mjs 用 esbuild 打包后在 Node 上跑。
  *
  * 覆盖排程升级（全部纯函数，不起后端、不出网，城市走 opts.city 注入）：
- *  ① 多天地理聚类：每天应是同城一小片，而不是「第 1 天吃掉全城高分点」
+ *  ① 单天顺路 / 多天地理聚类：每天应是同城一小片，而不是「第 1 天吃掉全城高分点」
  *  ② 餐饮不进行程：时间轴只放正事；吃的改成行程项详情页「附近推荐」（snackSlot 口径）
  *  ③ 雨天适配：预报有降水的天，室内项稳定提前并写 note；攻略模式只提示不重排
  *  ④ isWetDayCode 的 WMO 码口径 + isIndoorPoi 推断口径
+ *  ⑤ 个性化口味画像：足迹 → 权重，选点温和加权；样本 <2 不生效；不碰聚类
  */
 import assert from 'node:assert/strict'
 import type { CitySeed, PoiSeed } from '../src/data/poi'
 import { generateItinerary, isWetDayCode } from '../src/utils/itinerary'
 import { isIndoorPoi } from '../src/utils/indoor'
 import { SNACK_SLOT_LABELS, snackSlotFor } from '../src/services/snacks'
-import type { WeatherDay } from '../src/types'
+import { CITY_TAGS, computeTaste, poiTasteTags, tasteBoost } from '../src/utils/taste'
+import type { WeatherDay, CityPassport } from '../src/types'
 
 let passed = 0
 function ok(name: string, cond: boolean): void {
@@ -213,6 +215,75 @@ console.log('═══ ⑥ WMO 口径与室内推断 ═══')
   ok('室内推断：人民广场不误判室内', !isIndoorPoi('人民广场'))
   ok('室内推断：岳麓山/橘子洲=户外', !isIndoorPoi('岳麓山') && !isIndoorPoi('橘子洲'))
   ok('室内推断：商业步行街=室内侧', isIndoorPoi('黄兴路步行街'))
+}
+
+console.log('═══ ⑤ 个性化口味画像（足迹 → 选点加权）═══')
+{
+  const mkPass = (name: string, status: 'visited' | 'wish', rating?: number): CityPassport => ({
+    id: `pp-${name}`,
+    name,
+    status,
+    lat: 0,
+    lng: 0,
+    rating,
+    createdAt: 0,
+    updatedAt: 0
+  })
+
+  // —— 画像推断 ——
+  const taste = computeTaste([
+    mkPass('三亚', 'visited', 5), // nature +2
+    mkPass('厦门', 'visited', 4), // nature +1, city +1
+    mkPass('青岛', 'visited'), // nature +0.75（到访即温和正样本）
+    mkPass('上海', 'visited', 1) // city -1.25（踩雷）
+  ])
+  ok('样本数按可贡献信号的城市计（4）', taste.sample === 4)
+  ok('权重：三亚5 + 厦门4 + 青岛0 → 山水 3.75（青岛到访即温和正样本）', Math.abs(taste.weights.nature - 3.75) < 1e-9)
+  ok('权重：三亚5 → 亲子 2', Math.abs(taste.weights.family - 2) < 1e-9)
+  ok('权重：厦门4→+1、青岛0→+0.75、上海1→-1.25，都市净 0.5', Math.abs(taste.weights.city - 0.5) < 1e-9)
+  ok('brief 有画像结论（偏爱山水 → 前两位）', /偏爱山水自然/.test(taste.brief) && /4 城足迹/.test(taste.brief))
+
+  const single = computeTaste([mkPass('三亚', 'visited', 5)])
+  ok('样本只有 1 城：brief 不给结论', single.brief === '')
+
+  // —— POI 关键词推断 ——
+  ok('洱海/岳麓山/橘子洲 → 山水', poiTasteTags('大理环洱海路线').includes('nature') && poiTasteTags('岳麓山').includes('nature') && poiTasteTags('橘子洲').includes('nature'))
+  ok('博物馆 → 人文', poiTasteTags('湖南省博物馆').includes('history'))
+  ok('步行街/人民广场 → 都市', poiTasteTags('黄兴路步行街').includes('city') && poiTasteTags('人民广场').includes('city'))
+  ok('海底世界海洋馆 → 亲子场馆', poiTasteTags('海底世界海洋馆').includes('family'))
+  ok('加成 ±4 封顶', tasteBoost({ name: '某乐园', type: 'spot' }, { weights: { nature: -10, history: 0, city: 0, family: -10 }, sample: 5, brief: '' }) === -4)
+  ok('餐饮不吃加成（本就不进行程）', tasteBoost({ name: '某乐园', type: 'food' }, { weights: { nature: 0, history: 0, city: 0, family: 5 }, sample: 5, brief: '' }) === 0)
+
+  // —— 选点对比：两个 ≥4km 分隔的簇，画像让低分的山水簇翻正当天种子 ——
+  // （单簇内是就近生长不看分，画像翻转不了；分差在「种子」上起效）
+  const mkCity = (): CitySeed => ({
+    name: '画像城',
+    alias: [],
+    intro: '',
+    pois: [
+      // 山水簇（西，dx≈0）：rating 4.7（基础分 2.4）
+      spot('泊湖一侧', 0, 0, { rating: 4.7 }),
+      spot('云山步道', 0.01, 0, { rating: 4.7 }),
+      spot('洲尾湿地', 0.02, 0, { rating: 4.7 }),
+      // 都市簇（东，dx≈0.045→4.3km 外）：rating 4.9（基础分 2.8，无画像时必是种子）
+      spot('天环广场', 0.045, 0.001, { rating: 4.9 }),
+      spot('步行街东段', 0.055, 0, { rating: 4.9 }),
+      spot('环球中心', 0.065, 0, { rating: 4.9 })
+    ]
+  })
+
+  // 无画像（样本不足）：种子和高分都市簇走，整天在东簇
+  const ctlIn = generateItinerary({ ...BASE_INPUT }, undefined, { city: mkCity(), taste: single })
+  const ctlTitles = dayItems(ctlIn, 0).filter((i) => i.type === 'spot').map((i) => i.title).join('|')
+  ok('样本不足：仍是评分高的都市簇入选（画像不生效）', /天环广场/.test(ctlTitles) && !/泊湖/.test(ctlTitles))
+
+  // 有画像：山水簇（2.4+3.375=5.775）翻正当天种子，整天在西簇
+  const fav = generateItinerary({ ...BASE_INPUT }, undefined, { city: mkCity(), taste: taste })
+  const favTitles = dayItems(fav, 0).filter((i) => i.type === 'spot').map((i) => i.title).join('|')
+  ok('有画像：山水簇翻正当天种子', /泊湖/.test(favTitles) && !/天环广场/.test(favTitles))
+  ok('有画像：整天在山水簇里（三个山水点全进）', /泊湖/.test(favTitles) && /云山/.test(favTitles) && /洲尾/.test(favTitles))
+  ok('summary 交代了画像来历', /按你的足迹/.test(fav.summary))
+  ok('单天相邻跳跃仍 ≤3km（画像不碰地理聚类）', maxJump(dayItems(fav, 0)) <= 3)
 }
 
 console.log(`═══ 排程质量：${passed} 通过 / 0 失败 ═══`)
