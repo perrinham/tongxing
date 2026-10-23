@@ -212,14 +212,29 @@ export async function buildCityFromAmap(cityName: string): Promise<CitySeed | nu
   }
 
   // 限流是抖动型失败（一轮里总有部分路空手而归），整体重试一次能救回大半；
-  // 两次都拿不满才按失败上报
-  const tryOnce = await fetchOnce().catch(() => null)
+  // 两次都拿不满才按失败上报。
+  // ⚠️ 失败原因必须透传：throw（带 errMsg/LIMIT 等细节）而不是返回 null —— 否则
+  // 上层只能报笼统的「限流或断网」，真机上排查不了（域名漏白名单 / key 失效 /
+  // QPS 限流三者在手机端症状一样，细节一下就分开了）。检索质量差（<4 个景点）
+  // 仍然返回 null，那走「换个地名重试」的提示。
+  let lastErr = ''
+  const tryOnce = await fetchOnce().catch((e: { message?: string }) => {
+    lastErr = e?.message || String(e)
+    return null
+  })
   if (tryOnce) {
     seedCache.set(city, tryOnce)
     return tryOnce
   }
   await new Promise((r) => setTimeout(r, 700))
-  const retried = await fetchOnce().catch(() => null)
-  if (retried) seedCache.set(city, retried)
-  return retried
+  const retried = await fetchOnce().catch((e: { message?: string }) => {
+    lastErr = e?.message || lastErr
+    return null
+  })
+  if (retried) {
+    seedCache.set(city, retried)
+    return retried
+  }
+  if (lastErr) throw new Error(lastErr)
+  return null
 }

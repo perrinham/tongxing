@@ -149,7 +149,13 @@ export async function generateItineraryAsync(
   if (!known) {
     // 在线拉取要 1-2s，是整个链路里最值得先「流」出来的环节
     onStage?.('fetch', {})
-    const online = await buildCityFromAmap(input.destination)
+    // 抓取失败时 buildCityFromAmap 会 throw 带具体原因（errMsg/LIMIT/INVALID_USER_KEY 等），
+    // 包一层保留前缀，让真机上的报错一眼能定位（域名漏白名单 / key 过期 / 限流三种症状不同）
+    const online = await buildCityFromAmap(input.destination).catch((e) => {
+      throw new Error(
+        `未能从高德拉取「${input.destination}」的点位（${(e as Error)?.message || e}），请稍后重试`
+      )
+    })
     if (online) {
       const out = assemble(online, true, input, totalDays, pace, prefs, onStage)
       return out
