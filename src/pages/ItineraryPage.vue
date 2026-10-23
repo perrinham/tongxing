@@ -15,6 +15,7 @@ import {
 import { fetchTripWeather } from '@/services/weather'
 import { weatherBrief, type WeatherDay } from '@/utils/weather'
 import { checkItinerary, timeMinOf, kmBetween, type ItinIssue, type RouteLike, type LatLike } from '@/utils/itinCheck'
+import { packGroupLabel } from '@/utils/packing'
 import { walkingRoute, drivingRoute } from '@/services/amap'
 import type { ItineraryItem } from '@/types'
 import AppNav from '@/components/AppNav.vue'
@@ -214,6 +215,46 @@ function insertTransport(issue: ItinIssue) {
   uni.showToast({ title: '已插入交通衔接', icon: 'none' })
 }
 
+// ── 行李清单：trip.packing 是 AI 生成的模板，用户增删勾选就是真实状态 ──
+const showPacking = ref(false)
+const newItemText = ref('')
+
+const packing = computed(() => trip.value?.packing || null)
+const packTotal = computed(() => packing.value?.items.length || 0)
+const packDone = computed(() => packing.value?.items.filter((i) => i.done).length || 0)
+
+/** 分组靠「与上一项组不同」推断（生成时按组连续产出）；index 供 store 精确增删 */
+const packRows = computed(() => {
+  const p = packing.value
+  if (!p) return []
+  return p.items.map((it, index) => ({
+    it,
+    index,
+    newGroup: index === 0 || p.items[index - 1].group !== it.group
+  }))
+})
+
+function togglePack(index: number) {
+  if (trip.value) store.togglePacking(trip.value.id, index)
+}
+
+function removePack(index: number) {
+  if (trip.value) store.removePackingItem(trip.value.id, index)
+}
+
+function rebuildPacking() {
+  if (!trip.value) return
+  store.buildPacking(trip.value.id)
+  uni.showToast({ title: '清单已按行程重造', icon: 'none' })
+}
+
+function addPackItem() {
+  const title = newItemText.value.trim()
+  if (!trip.value || !title) return
+  store.addPackingItem(trip.value.id, title)
+  newItemText.value = ''
+}
+
 
 function goPolls() {
   if (trip.value) nav.to('poll', { id: trip.value.id })
@@ -380,6 +421,15 @@ function goMap() {
             <AppIcon name="right" :size="15" color="var(--text-tertiary)" />
           </button>
           <div class="list-sep" />
+          <button class="list-row" @click="showPacking = true">
+            <AppIcon name="list" :size="18" color="var(--text-secondary)" />
+            <span class="pad">行李清单</span>
+            <span class="grow" />
+            <span v-if="packTotal" class="vflag okv">{{ packDone }}/{{ packTotal }}</span>
+            <span v-else class="vflag warn">待生成</span>
+            <AppIcon name="right" :size="15" color="var(--text-tertiary)" />
+          </button>
+          <div class="list-sep" />
           <div class="list-row">
             <span class="grow">预估价</span>
             <span class="num est-num">{{ moneyBrief(tripEstimate, trip.currency) }}</span>
@@ -543,6 +593,45 @@ function goMap() {
       </div>
     </AppSheet>
 
+    <!-- 行李清单面板：分组勾选 + 增删，模板可按行程随时重造 -->
+    <AppSheet v-model="showPacking" title="行李清单">
+      <div class="pack-head">
+        <p class="pack-progress num">{{ packTotal ? `已备 ${packDone}/${packTotal}` : '还没有清单' }}</p>
+        <button v-if="packTotal" class="pack-rebuild" @click="rebuildPacking">重新生成</button>
+      </div>
+
+      <template v-if="packRows.length">
+        <div class="pack-list">
+          <template v-for="row in packRows" :key="row.index">
+            <p v-if="row.newGroup" class="pack-group">{{ packGroupLabel(row.it.group) }}</p>
+            <div class="pack-row" :class="{ done: row.it.done }">
+              <button class="pack-check" :class="{ on: row.it.done }" @click="togglePack(row.index)">
+                <AppIcon v-if="row.it.done" name="check" :size="11" color="#fff" :stroke="2.8" />
+              </button>
+              <span class="pack-title ellipsis">{{ row.it.title }}</span>
+              <button class="pack-x" @click="removePack(row.index)">删</button>
+            </div>
+          </template>
+        </div>
+        <div class="pack-add">
+          <input
+            v-model="newItemText"
+            class="pack-input"
+            placeholder="再添一件…"
+            maxlength="20"
+            confirm-type="done"
+            @confirm="addPackItem"
+          />
+          <button class="pack-add-btn" :disabled="!newItemText.trim()" @click="addPackItem">添上</button>
+        </div>
+      </template>
+
+      <div v-else class="pack-empty">
+        <p>按行程天数、季节、交通与住宿自动生成，生成后可随意增删勾选。</p>
+        <button class="pack-build-btn" @click="rebuildPacking">生成行李清单</button>
+      </div>
+    </AppSheet>
+
     <AppSheet v-model="showActions" :title="activeItem?.title || ''">
       <div class="acts">
         <button class="act" @click="toggleDone">
@@ -692,6 +781,133 @@ function goMap() {
 
 .ci-btn[disabled] {
   opacity: 0.55;
+}
+
+/* ── 行李清单 ─────────────────────────────────────────── */
+.pack-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 2px 10px;
+}
+
+.pack-progress {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--brand-deep);
+}
+
+.pack-rebuild,
+.pack-build-btn {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand-deep);
+  background: var(--bg-subtle);
+  padding: 7px 12px;
+  border-radius: 10px;
+}
+
+.pack-build-btn {
+  margin-top: 12px;
+}
+
+.pack-list {
+  display: flex;
+  flex-direction: column;
+  padding: 2px 2px 8px;
+}
+
+.pack-group {
+  margin-top: 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  letter-spacing: 1px;
+}
+
+.pack-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 42px;
+}
+
+.pack-row.done .pack-title {
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+}
+
+.pack-check {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  background: var(--bg-card);
+  border: 1.5px solid var(--line-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.pack-check.on {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+.pack-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 14px;
+  color: var(--text-primary);
+}
+
+.pack-x {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  background: var(--bg-subtle);
+  padding: 4px 9px;
+  border-radius: 8px;
+}
+
+.pack-add {
+  display: flex;
+  gap: 8px;
+  padding: 10px 2px 4px;
+  border-top: 1px solid var(--line);
+}
+
+.pack-input {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  background: var(--bg-subtle);
+  border-radius: 10px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+
+.pack-add-btn {
+  flex-shrink: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--brand-deep);
+  background: var(--bg-card);
+  padding: 0 12px;
+  border-radius: 10px;
+}
+
+.pack-add-btn[disabled] {
+  opacity: 0.55;
+}
+
+.pack-empty {
+  padding: 10px 4px 6px;
+}
+
+.pack-empty p {
+  font-size: 13px;
+  color: var(--text-secondary);
 }
 
 .ov-list {

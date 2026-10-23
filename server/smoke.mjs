@@ -554,6 +554,41 @@ try {
   })
   ok(!s8.data.doc.members.some((m) => m.id === 'm3'), '已删成员不会被旧快照复活', s8.data.doc.members.map((m) => m.id))
 
+  // ── 行李清单（trip.packing）：白名单放行 + 裁剪 + 往返 ──
+  {
+    // 41 个合法项（编号 1..41），混入一个空标题项与一个带垃圾键的项
+    const packItems = Array.from({ length: 41 }, (_, i) => ({
+      title: `第${i + 1}件`,
+      group: 'wear',
+      done: i === 0
+    }))
+    packItems.push({ title: '', group: 'wear' })
+    packItems.push({ title: '垃圾项', junk: 1 })
+    // 行程记录的时间戳必须落在真实的「当下」：戳到未来（哪怕是 t2 那种
+    // Date.now()+120s 的合成值）会被 isSpaceDeleted 判成「删后又改」，
+    // DELETE 之后墓碑压不过它，列表/详情就永远 deleted:false。
+    const tp = Date.now()
+    const sP = await M('POST', `/api/trips/${T}`, {
+      author: '阿哲',
+      doc: mkDoc({ trip: { ...mkDoc({}).trip, updatedAt: tp, packing: { builtAt: t0, items: packItems } } })
+    })
+    const p = sP.data.doc.trip.packing
+    ok(p && Array.isArray(p.items), 'packing 入库', p)
+    ok(p.items.length === 40, '清单裁到 40 上限（43 → 40）', p?.items.length)
+    ok(p.items[0].done === true && p.items[0].title === '第1件', '勾选状态与标题保序保真', p.items[0])
+    ok(p.items.every((x) => !!x.title), '空标题项被丢弃')
+    ok(p.items.every((x) => !('junk' in x)), '额外键被剥掉')
+    const gP = await M('GET', `/api/trips/${T}`)
+    ok(gP.data.space.doc.trip.packing.items.length === 40, 'GET 往返后 packing 仍在')
+
+    // 另一台设备带上**没有 packing** 的旧快照推回来 —— 别把清单冲掉（字段级合并生效）
+    const sPR = await M('POST', `/api/trips/${T}`, {
+      author: 'Yuki',
+      doc: mkDoc({ trip: { ...mkDoc({}).trip, updatedAt: tp - 1 } })
+    })
+    ok(sPR.data.doc.trip.packing.items.length === 40, '旧快照无 packing 字段 → 不抹掉清单（fhlc 比字段）')
+  }
+
   // 离线只推墓碑（doc: null）
   const tb = [{ kind: 'expense', id: 'e9', deletedAt: t2 + 20_000 }]
   const s9 = await M('POST', `/api/trips/${T}`, { author: 'Yuki', doc: null, tombstones: tb })

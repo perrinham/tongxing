@@ -23,6 +23,7 @@ import { uid } from '@/utils/id'
 import { useCityStore } from '@/stores/city'
 import { addDays, daysBetween, todayISO, avatarColor } from '@/utils/format'
 import { generateItinerary, generateItineraryAsync, type GenerateInput, type GenerateOutput } from '@/utils/itinerary'
+import { buildPackingList } from '@/utils/packing'
 import { tallyOf, type PollTally } from '@/utils/poll'
 import { settle as runSettle } from '@/utils/settlement'
 import { createBackend, BackendError, type BackendClient } from '@/services/backend'
@@ -1072,6 +1073,8 @@ export const useTripStore = defineStore('trip', {
       trip.startDate = input.startDate
       trip.endDate = input.endDate
       this.stampFields([trip], ['destination', 'startDate', 'endDate'])
+      // 行程重排后行李清单跟着重造（内部自带 stamp + commit）
+      this.buildPacking(tripId)
       this.stamp(...out.days, ...out.items)
       this.commit(tripId)
       return out.summary
@@ -1173,6 +1176,76 @@ export const useTripStore = defineStore('trip', {
       Object.assign(d, patch)
       this.stampFields([d], Object.keys(patch))
       this.commit(d.tripId)
+    },
+
+    // ---------- 行李清单 ----------
+    //
+    // 挂在 trip.packing 这个**单个字段**上整块合并，不建独立实体 ——
+    // 清单不是高频并发编辑对象，一件一件踩 LWW 的成本不划算。
+
+    /**
+     * 按当前行程信息生成/重造清单。触发点：
+     *   · applyGenerate（生成行程收尾自动建）；
+     *   · 行程页「重新生成」按钮（手动建,适合没走过生成的本地行程）。
+     */
+    buildPacking(tripId: string) {
+      const trip = this.trips.find((t) => t.id === tripId)
+      if (!trip) return
+      const dayCount = this.days.filter((d) => d.tripId === tripId).length
+      // 没排过日程的行程（手建后直接不生成了）：按起止日期差数天数
+      let days = dayCount
+      if (!days) {
+        const span = Date.parse(trip.endDate) - Date.parse(trip.startDate)
+        days = Number.isFinite(span) ? Math.round(span / 86_400_000) + 1 : 1
+      }
+      const items = this.items.filter((i) => i.tripId === tripId)
+      trip.packing = {
+        builtAt: Date.now(),
+        items: buildPackingList({
+          destination: trip.destination,
+          days,
+          startDate: trip.startDate,
+          hasStay: items.some((i) => i.type === 'stay'),
+          hasTransit: items.some((i) => i.type === 'transport')
+        })
+      }
+      this.stampFields([trip], ['packing'])
+      this.commit(tripId)
+    },
+
+    togglePacking(tripId: string, index: number) {
+      const trip = this.trips.find((t) => t.id === tripId)
+      const p = trip?.packing
+      if (!trip || !p || !p.items[index]) return
+      p.items = p.items.map((x, i) => (i === index ? { ...x, done: !x.done } : x))
+      this.stampFields([trip], ['packing'])
+      this.commit(tripId)
+    },
+
+    addPackingItem(tripId: string, title: string) {
+      const trip = this.trips.find((t) => t.id === tripId)
+      if (!trip || !title.trim()) return
+      // 最多 40 项 —— 与服务端裁剪孪生一致，超限就不再加（顶多少记一件）
+      if ((trip.packing?.items.length || 0) >= 40) return
+      trip.packing = {
+        builtAt: trip.packing?.builtAt || Date.now(),
+        items: [
+          ...(trip.packing?.items || []),
+          { title: title.trim().slice(0, 24), group: 'misc', done: false }
+        ]
+      }
+      this.stampFields([trip], ['packing'])
+      this.commit(tripId)
+    },
+
+    removePackingItem(tripId: string, index: number) {
+      const trip = this.trips.find((t) => t.id === tripId)
+      const p = trip?.packing
+      if (!trip || !p || !p.items[index]) return
+      trip.packing = { builtAt: p.builtAt, items: p.items.filter((_, i) => i !== index) }
+      if (!trip.packing.items.length) delete trip.packing // 清空即整个字段摘掉
+      this.stampFields([trip], ['packing'])
+      this.commit(tripId)
     },
 
     // ---------- 记账 ----------

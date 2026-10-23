@@ -276,6 +276,70 @@ let code = ''
   ok(!isErr(stranger), 'trips 无主空间任何人可写（认领前）')
 }
 
+// ───────────────────────── trips：行李清单（trip.packing） ─────────────────────────
+
+console.log('· trips 行李清单')
+;{
+  // 与 server/smoke.mjs 的同款断言：入库 + 40 上限 + 空标题丢弃 + GET 往返。
+  // 用独立的 sp-pk 空间，不搅动后面用例的 rev 连续性。
+  // 时间戳用当下的 Date.now()（NOW 是文件头取的常量，NOW+偏移会戳到未来，
+  // 让 trip 记录在未来时间上赢过一切墓碑，把「删后又改」判成活记录）。
+  const pkTp = Date.now()
+  const items = [
+    { title: '身份证', group: 'docs', done: false },
+    { title: '', group: 'docs' }, // 空标题 → 丢
+    { title: '垃圾项', junk: 1 }, // 额外键 → 剥
+    ...Array.from({ length: 41 }, (_, i) => ({
+      title: `第${i + 1}件`,
+      group: 'wear',
+      done: i === 0
+    }))
+  ]
+  const pushed = await call(
+    trips,
+    {
+      action: 'push',
+      id: 'sp-pk',
+      author: '小明',
+      deviceId: 'dev-pk',
+      baseRev: null,
+      doc: tripDoc({ updatedAt: pkTp, packing: { builtAt: NOW, items } }),
+      tombstones: [],
+      loggedIn: true
+    },
+    'openid-A'
+  )
+  ok(!isErr(pushed), 'packing 随 doc 入云成功')
+  eq(pushed.doc?.trip?.packing?.items?.length, 40, '云裁剪：43 → 40')
+  ok(pushed.doc?.trip?.packing?.items[0]?.title === '身份证', '首项保序')
+  ok(!pushed.doc?.trip?.packing?.items.some((x) => !x.title || 'junk' in x), '空标题丢弃、垃圾键剥掉')
+
+  const got = await call(trips, { action: 'get', id: 'sp-pk' }, 'openid-B')
+  eq(got.space?.doc?.trip?.packing?.items?.length, 40, 'get 往返后 packing 仍在云上')
+
+  // 旧快照（trip 不带 packing 字段）推回来不能抹掉清单 —— 字段级合并。
+  // 另一台设备先凭分享码入伙：云函数孪生认领后有归属权校验，
+  // 陌生人直推会被 accessVerdict 打回。
+  const joinedPk = await call(trips, { action: 'join', code: pushed.space.code, loggedIn: true }, 'openid-B')
+  ok(joinedPk.joined === true, '另一台设备凭分享码加入', JSON.stringify(joinedPk).slice(0, 200))
+  const stale = await call(
+    trips,
+    {
+      action: 'push',
+      id: 'sp-pk',
+      author: '阿花',
+      deviceId: 'dev-pk-2',
+      baseRev: pushed.serverRev,
+      doc: tripDoc({ updatedAt: pkTp - 1_000 }),
+      tombstones: [],
+      loggedIn: true
+    },
+    'openid-B'
+  )
+  ok(!isErr(stale), '旧快照 push 成功')
+  eq(stale.doc?.trip?.packing?.items?.length, 40, '旧快照无 packing 字段 → 不抹掉清单（fhlc 比字段）')
+}
+
 // ───────────────────────── trips：认领 ─────────────────────────
 
 console.log('· trips 认领与越权')

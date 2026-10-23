@@ -147,7 +147,31 @@ function normTrip(raw, spaceId) {
     hlc: recordHlc(raw.hlc, updatedAt)
   }
   if (raw.settledAt !== undefined) t.settledAt = ts(raw.settledAt)
+  // 行李清单：挂在 trip 上的单个字段，整块参与字段级 LWW（见 src/utils/packing.ts）
+  if (raw.packing !== undefined) {
+    const p = normPacking(raw.packing)
+    if (p) t.packing = p
+  }
   return withFhlc(t, raw)
+}
+
+/**
+ * 行李清单裁剪（孪生函数：server/routes/trips.mjs ↔ cloudfunctions/trips/index.js，
+ * 改一处必改另一处）。上限 40 项；标题 ≤24、分组 key ≤8，空标题直接丢；
+ * 额外键一律剥掉。清单不是高频并发编辑对象，整块合并的粒度够用。
+ */
+function normPacking(raw) {
+  if (!isPlainObject(raw)) return null
+  const list = Array.isArray(raw.items) ? raw.items : []
+  const items = []
+  for (let i = 0; i < list.length && items.length < 40; i++) {
+    const r = list[i]
+    if (!isPlainObject(r)) continue
+    const title = str(r.title, 24)
+    if (!title) continue
+    items.push({ title, group: str(r.group, 8) || '其他', done: bool(r.done) })
+  }
+  return { builtAt: ts(raw.builtAt, Date.now()), items }
 }
 
 function normMember(raw, tripId) {

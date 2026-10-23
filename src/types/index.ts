@@ -1,4 +1,19 @@
 /** 行程空间 */
+
+/** 行李清单里的单件：group 是分组 key（见 utils/packing 的 PACKING_GROUPS），done = 已装包 */
+export interface PackingItem {
+  title: string
+  group: string
+  done: boolean
+}
+
+/** 行李清单整体（trip.packing 字段，整块参与字段级 LWW） */
+export interface PackingList {
+  /** 生成时间：用来识别「自动生成、可整体重造」 */
+  builtAt: number
+  items: PackingItem[]
+}
+
 export interface Trip {
   id: string
   title: string
@@ -12,6 +27,12 @@ export interface Trip {
   createdAt: number
   /** 是否已完成结算 */
   settledAt?: number
+  /**
+   * 行李清单（AI 按行程信息生成，用户可增删勾选）。
+   * 整体作为**单个字段**参与字段级 LWW 合并 —— 清单不是高频并发编辑对象，
+   * 整块粒度够用；服务端/云函数的 normTrip 各有一份同款裁剪孪生（40 项上限）。
+   */
+  packing?: PackingList
   /**
    * 最后修改时间。云端同步靠它做 last-write-wins 比较，
    * 因此**任何改动都必须刷新这个字段**（见 stores/trip.ts 的 touch）。
