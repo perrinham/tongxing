@@ -1048,12 +1048,38 @@ export const useTripStore = defineStore('trip', {
         weather?: Map<string, WeatherDay> | Promise<Map<string, WeatherDay> | undefined>
         /** 口味画像（utils/taste，从足迹推断），样本 ≥2 才生效 */
         taste?: Taste
+        /**
+         * 同目的地已打卡 POI 名（重访降权）。缺省自动从历史行程收——
+         * 同目的地行程里 done/verified 过的项名；白给一个 [] 则完全关闭。
+         */
+        revisit?: string[]
       }
     ): Promise<string> {
       const trip = this.trips.find((t) => t.id === tripId)
       if (!trip) return ''
-      const out = await generateItineraryAsync(input, onStage, opts)
+      const revisit = opts?.revisit ?? this.revisitNamesFor(input.destination)
+      const out = await generateItineraryAsync(input, onStage, { ...opts, revisit })
       return this.applyGenerate(tripId, input, out)
+    },
+
+    /**
+     * 同目的地历史行程里用户已打卡/已核实过的项名 —— 重访降权信号
+     * （「这次换个新鲜点」）。generateAsync 在清旧行程项**之前**调用，
+     * 所以同一行程重排再生成时，上次的打卡也计入。
+     */
+    revisitNamesFor(destination: string): string[] {
+      const dest = destination.trim()
+      if (!dest) return []
+      const names: string[] = []
+      for (const t of this.trips) {
+        if (t.destination !== dest) continue
+        for (const it of this.items) {
+          if (it.tripId !== t.id) continue
+          if (!it.done && !it.verifiedAt) continue
+          if (it.title && !names.includes(it.title)) names.push(it.title)
+        }
+      }
+      return names
     },
 
     /** 把生成结果写进行程空间（清旧 -> 写新 -> 戳字段 -> commit） */

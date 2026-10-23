@@ -6,14 +6,15 @@
  *  ② 餐饮不进行程：时间轴只放正事；吃的改成行程项详情页「附近推荐」（snackSlot 口径）
  *  ③ 雨天适配：预报有降水的天，室内项稳定提前并写 note；攻略模式只提示不重排
  *  ④ isWetDayCode 的 WMO 码口径 + isIndoorPoi 推断口径
- *  ⑤ 个性化口味画像：足迹 → 权重，选点温和加权；样本 <2 不生效；不碰聚类
+ *  ⑦ 个性化口味画像：足迹 → 权重，选点温和加权；样本 <2 不生效；不碰聚类
+ *  ⑧ 个性化再深一层：评分敏感度（普遍给分严的用户更吃高评分）+ 同城打卡重访降权
  */
 import assert from 'node:assert/strict'
 import type { CitySeed, PoiSeed } from '../src/data/poi'
 import { generateItinerary, isWetDayCode } from '../src/utils/itinerary'
 import { isIndoorPoi } from '../src/utils/indoor'
 import { SNACK_SLOT_LABELS, snackSlotFor } from '../src/services/snacks'
-import { CITY_TAGS, computeTaste, poiTasteTags, tasteBoost } from '../src/utils/taste'
+import { CITY_TAGS, computeTaste, poiTasteTags, sensitivityOf, tasteBoost } from '../src/utils/taste'
 import type { WeatherDay, CityPassport } from '../src/types'
 
 let passed = 0
@@ -217,7 +218,7 @@ console.log('═══ ⑥ WMO 口径与室内推断 ═══')
   ok('室内推断：商业步行街=室内侧', isIndoorPoi('黄兴路步行街'))
 }
 
-console.log('═══ ⑤ 个性化口味画像（足迹 → 选点加权）═══')
+console.log('═══ ⑦ 个性化口味画像（足迹 → 选点加权）═══')
 {
   const mkPass = (name: string, status: 'visited' | 'wish', rating?: number): CityPassport => ({
     id: `pp-${name}`,
@@ -284,6 +285,57 @@ console.log('═══ ⑤ 个性化口味画像（足迹 → 选点加权）═
   ok('有画像：整天在山水簇里（三个山水点全进）', /泊湖/.test(favTitles) && /云山/.test(favTitles) && /洲尾/.test(favTitles))
   ok('summary 交代了画像来历', /按你的足迹/.test(fav.summary))
   ok('单天相邻跳跃仍 ≤3km（画像不碰地理聚类）', maxJump(dayItems(fav, 0)) <= 3)
+}
+
+console.log('═══ ⑧ 个性化再深一层：评分敏感度 + 打卡重访降权 ═══')
+{
+  // —— 评分敏感度映射 ——
+  ok('无评分样本 → 1.0（不猜）', sensitivityOf([]) === 1 && sensitivityOf([5]) === 1)
+  ok('普遍给分慷慨（5+5）→ 1.0 基准', sensitivityOf([5, 5]) === 1)
+  ok('中性样本（5+4）→ 1.075', Math.abs(sensitivityOf([5, 4]) - 1.075) < 1e-9)
+  ok('普遍给分严格（3+3）→ 1.45', Math.abs(sensitivityOf([3, 3]) - 1.45) < 1e-9)
+  ok('极严格（1+1）→ 封顶 1.5', sensitivityOf([1, 1]) === 1.5)
+  const strictTaste = computeTaste([
+    { id: 'a', name: '黄山', status: 'visited', lat: 0, lng: 0, rating: 3, createdAt: 0, updatedAt: 0 },
+    { id: 'b', name: '桂林', status: 'visited', lat: 0, lng: 0, rating: 3, createdAt: 0, updatedAt: 0 }
+  ])
+  ok('computeTaste 带出敏感度 1.45', strictTaste.sensitivity === 1.45)
+
+  // —— 生成级：敏感度不改聚类/餐饮口径（只放大评分项权重）——
+  const sensCity: CitySeed = { name: '敏感城', alias: [], intro: '', pois: [spot('岳麓山', 0, 0, { rating: 4.9 }), spot('市博物馆', 0.01, 0, { rating: 4.8 })] }
+  const sensOut = generateItinerary({ ...BASE_INPUT }, undefined, { city: sensCity, taste: strictTaste })
+  ok('敏感度 >1 时不破顺路与聚类', maxJump(sensOut.items) <= 3 && sensOut.items.every((i) => i.type !== 'food'))
+
+  // —— 重访降权：打过的卡让位，但不能消失 ——
+  const revisitCity: CitySeed = {
+    name: '重访城',
+    alias: [],
+    intro: '',
+    pois: [
+      spot('泊湖一侧', 0, 0, { rating: 4.9 }), // A：基线当天种子
+      spot('云山步道', 0.01, 0, { rating: 4.85 }),
+      spot('洲尾湿地', 0.02, 0, { rating: 4.8 }), // C：下一棒
+      spot('长乐街', -0.012, 0.001, { rating: 4.75 }) // 无标签名，纯对照
+    ]
+  }
+  const base = generateItinerary({ ...BASE_INPUT }, undefined, { city: revisitCity })
+  ok('基线：A 是当天种子', dayItems(base, 0).find((i) => i.type === 'spot')?.title === '泊湖一侧')
+  ok('基线 summary 无重访交代', !/打卡/.test(base.summary))
+
+  const revisited = generateItinerary({ ...BASE_INPUT }, undefined, { city: revisitCity, revisit: ['泊湖一侧', '云山步道'] })
+  ok('降权后：C 翻正当天种子', dayItems(revisited, 0).find((i) => i.type === 'spot')?.title === '洲尾湿地')
+  ok('降权后：被打卡的 A 仍在槽位里（温和降权不硬删）', dayItems(revisited, 0).some((i) => i.title === '泊湖一侧'))
+  ok('summary 交代避开名单', /避开你打卡过的 2 个点/.test(revisited.summary))
+
+  // 护栏：名单盖过半数候选 → 整表跳过，行为与基线一致
+  const guarded = generateItinerary({ ...BASE_INPUT }, undefined, { city: revisitCity, revisit: ['泊湖一侧', '云山步道', '洲尾湿地'] })
+  ok('护栏：3/4 名单盖过半数 → 与基线一致（种子回归 A）', dayItems(guarded, 0).find((i) => i.type === 'spot')?.title === '泊湖一侧')
+  const guardedAll = generateItinerary({ ...BASE_INPUT }, undefined, {
+    city: revisitCity,
+    revisit: ['泊湖一侧', '云山步道', '洲尾湿地', '长乐街']
+  })
+  ok('护栏：全名单 → 与基线一致（种子回归 A）', dayItems(guardedAll, 0).find((i) => i.type === 'spot')?.title === '泊湖一侧')
+  ok('护栏下 summary 无重访交代', !/打卡/.test(guardedAll.summary))
 }
 
 console.log(`═══ 排程质量：${passed} 通过 / 0 失败 ═══`)

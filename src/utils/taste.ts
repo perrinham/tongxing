@@ -27,6 +27,8 @@ export interface Taste {
   weights: Record<TasteTag, number>
   /** 能贡献信号的有效足迹数（城市在标签表里才算数） */
   sample: number
+  /** 评分敏感度 1-1.5：历史给分偏低（严格型）→ 更吃高评分 */
+  sensitivity: number
   /** 一句话简述，空串 = 没有可说的画像（UI 不展示） */
   brief: string
 }
@@ -114,10 +116,24 @@ export function poiTasteTags(name: string): TasteTag[] {
   return out
 }
 
+/**
+ * 评分敏感度：从用户历史给分推断「打分口径」，喂给选点的评分项。
+ *  · 用户普遍给分严（均值低）→ 更吃高评分（评分项放大，最高 1.5）；
+ *  · 普遍给分慷慨（均值接近满分）→ 维持基准 1.0；
+ *  · 有效评分 <2 条 → 1.0（样本不足不猜）。
+ */
+export function sensitivityOf(ratings: number[]): number {
+  const list = (ratings || []).filter((r) => typeof r === 'number' && r > 0)
+  if (list.length < 2) return 1
+  const mean = list.reduce((a, r) => a + r, 0) / list.length
+  return Math.min(1.5, Math.max(1, 1 + (4.8 - mean) * 0.25))
+}
+
 /** 足迹 → 画像：温和正样本（到访/想去/4 分起）+ 负样本（≤2 分的雷） */
 export function computeTaste(passports: CityPassport[]): Taste {
   const weights = { nature: 0, history: 0, city: 0, family: 0 } as Record<TasteTag, number>
   let sample = 0
+  const ratings: number[] = []
   for (const p of passports || []) {
     const tags = CITY_TAGS[p.name]
     if (!tags || !tags.length || !p.name) continue
@@ -132,6 +148,7 @@ export function computeTaste(passports: CityPassport[]): Taste {
     }
     for (const t of tags) weights[t] += w
     sample += 1
+    if (typeof p.rating === 'number' && p.rating > 0) ratings.push(p.rating)
   }
 
   // 只有画像「有结论」再写 UI 文案（lead 维度 ± 踩雷维度）
@@ -151,6 +168,7 @@ export function computeTaste(passports: CityPassport[]): Taste {
   return {
     weights,
     sample,
+    sensitivity: sensitivityOf(ratings),
     brief: briefParts.join(' · ') + (briefParts.length && sample ? `（来自 ${sample} 城足迹）` : '')
   }
 }

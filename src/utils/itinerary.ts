@@ -18,9 +18,14 @@ export interface GenOpts {
   weather?: Map<string, WeatherDay> | Promise<Map<string, WeatherDay> | undefined>
   /**
    * 口味画像（utils/taste 从足迹推断）。样本 ≥2 才生效：选点温和加权，
-   * 不碰地理聚类；攻略（真人玩法）模式不参与。
+   * 不碰地理聚类；攻略（真人玩法）模式不参与。sensitivity 一并喂给评分项。
    */
   taste?: Taste
+  /**
+   * 同目的地已打卡/已核实过的 POI 名（store 从历史行程里收集）。规则引擎给这些
+   * 点 -1.8 的重访降权（不硬删）；名单盖过半数候选时整表跳过；攻略模式不参与。
+   */
+  revisit?: string[]
   /**
    * 测试注入口：直接喂合成城市，跳过 matchCity（matchCity 对未知地名会兜底
    * CITIES[0]，用它构造的合成城市根本进不了排程）。仅同步入口认这个字段。
@@ -90,8 +95,14 @@ function distanceKm(a: { lng: number; lat: number }, b: { lng: number; lat: numb
 }
 
 /** 打分：偏好标签越高分，越优先入选 */
-function scorePoi(poi: PoiSeed, prefs: string[]): number {
+function scorePoi(poi: PoiSeed, prefs: string[], taste?: Taste): number {
   let s = 0
+  /**
+   * 个性化再深一层（评分敏感度）：历史给分偏严的用户（均值低）更吃高评分。
+   * 基准 1.0；严格型最高 1.5 —— 4.8 分那个 +2.8 的项会涨到 +4.2，
+   * 让「评分口碑」压过只有微弱偏好的点。taste.score 过时缺省 1.0（行为不变）。
+   */
+  const sens = taste?.sensitivity ?? 1
   if (prefs.includes('nature') && poi.type === 'spot' && poi.area.includes('山')) s += 3
   if (prefs.includes('nature') && (poi.name.includes('公园') || poi.name.includes('生态') || poi.name.includes('湿地'))) s += 2
   if (prefs.includes('history') && (poi.name.includes('博物馆') || poi.name.includes('遗址') || poi.name.includes('古城') || poi.name.includes('寺') || poi.name.includes('塔'))) s += 3
@@ -108,7 +119,7 @@ function scorePoi(poi: PoiSeed, prefs: string[]): number {
   if (poi.name.includes('熊猫') || poi.name.includes('兵马俑') || poi.name.includes('鼓浪屿')) s += 2.5
   if (poi.name.includes('洱海') || poi.name.includes('古城') || poi.name.includes('洪崖洞')) s += 1.5
   // 高德在线库的评分加权（0-5 分映射到最高 +3）：4.8 分相当于 +2.9
-  if (poi.rating) s += (poi.rating - 3.5) * 2
+  if (poi.rating) s += (poi.rating - 3.5) * 2 * sens
   return s
 }
 
@@ -145,7 +156,7 @@ export type GenStageSink = (stage: GenStage, info: GenStageInfo) => void
 export function generateItinerary(
   input: GenerateInput,
   onStage?: GenStageSink,
-  opts?: { weather?: Map<string, WeatherDay>; taste?: Taste; city?: CitySeed }
+  opts?: { weather?: Map<string, WeatherDay>; taste?: Taste; revisit?: string[]; city?: CitySeed }
 ): GenerateOutput {
   const city = opts?.city ?? matchCity(input.destination)
   const known = opts?.city ? true : isKnownCity(input.destination)
@@ -153,7 +164,7 @@ export function generateItinerary(
   const pace = PACE_SLOTS[input.pace] || PACE_SLOTS.normal
   const prefs = input.prefs || []
 
-  return assemble(city, known, input, totalDays, pace, prefs, onStage, opts?.weather, opts?.taste)
+  return assemble(city, known, input, totalDays, pace, prefs, onStage, opts?.weather, opts?.taste, opts?.revisit)
 }
 
 /**
@@ -191,7 +202,7 @@ export async function generateItineraryAsync(
       )
     })
     if (online) {
-      const out = assemble(online, true, input, totalDays, pace, prefs, onStage, weather, opts?.taste)
+      const out = assemble(online, true, input, totalDays, pace, prefs, onStage, weather, opts?.taste, opts?.revisit)
       return out
     }
     // 在线抓取失败（断网/限流/地名检索质量差）：明确报错让用户重试。
@@ -203,7 +214,7 @@ export async function generateItineraryAsync(
   }
 
   const city = matchCity(input.destination)
-  return assemble(city, known, input, totalDays, pace, prefs, onStage, weather, opts?.taste)
+  return assemble(city, known, input, totalDays, pace, prefs, onStage, weather, opts?.taste, opts?.revisit)
 }
 
 /** 组装：选攻略/规则引擎排布 -> 天气适配 -> 生成天与行程项 -> 交代策略 */
@@ -216,7 +227,8 @@ function assemble(
   prefs: string[],
   onStage?: GenStageSink,
   weather?: Map<string, WeatherDay>,
-  taste?: Taste
+  taste?: Taste,
+  revisit?: string[]
 ): GenerateOutput {
   // indoor 统一推断：内置库没标，在线库也没标 —— 一把尺子（utils/indoor）在装配口统一量
   const marked: CitySeed = {
@@ -244,7 +256,7 @@ function assemble(
   onStage?.('plan', { days: totalDays })
   const plan: PoiSeed[][] = guide
     ? guidePlan(marked, guide, totalDays, pace)
-    : ruleEnginePlan(marked, totalDays, pace, prefs, taste)
+    : ruleEnginePlan(marked, totalDays, pace, prefs, taste, revisit)
 
   // 攻略模式：用主题作当天标题，提示写入 day.note
   if (guide) {
@@ -270,7 +282,9 @@ function assemble(
   const items: ItineraryItem[] = itemsFromPlan(plan, days, city.name, pace)
   onStage?.('timeline', { count: items.length })
 
-  const summary = buildSummary(marked.name, totalDays, input.pace, prefs, items, known, input.destination, guide, taste)
+  // 重访降权实际生效的个数：护栏跳过（盖过半数候选）时为 0，不出措辞
+  const revisitHit = !guide && !!revisit?.length && revisit.length * 2 <= marked.pois.length ? revisit.length : 0
+  const summary = buildSummary(marked.name, totalDays, input.pace, prefs, items, known, input.destination, guide, taste, revisitHit)
   return { days, items, summary }
 }
 
@@ -334,10 +348,19 @@ function ruleEnginePlan(
   totalDays: number,
   pace: PlanPace,
   prefs: string[],
-  taste?: Taste
+  taste?: Taste,
+  revisit?: string[]
 ): PoiSeed[][] {
+  /**
+   * 重访降权（个性化再深一层）：同目的地历史行程里已经打卡/核实过的点
+   * 只温和降 1.8 分（换个新鲜点的信号），不硬删——槽位不够时它们仍可能入选。
+   * 护栏：重访名单盖过半数候选点时整表跳过（再扣就没得排了）。
+   */
+  const revisitOff = !!revisit && revisit.length * 2 > city.pois.length
+  const revisitSet = !revisitOff && revisit ? new Set(revisit) : null
+  const revisitPenalty = (name: string): number => (revisitSet && revisitSet.has(name) ? 1.8 : 0)
   const scored = city.pois
-    .map((p) => ({ poi: p, score: scorePoi(p, prefs) + tasteBoost(p, taste) }))
+    .map((p) => ({ poi: p, score: scorePoi(p, prefs, taste) + tasteBoost(p, taste) - revisitPenalty(p.name) }))
     .sort((a, b) => b.score - a.score)
 
   const dayTrips = scored.filter((x) => x.poi.dayTrip).map((x) => x.poi)
@@ -525,7 +548,8 @@ function buildSummary(
   known: boolean,
   rawInput: string,
   guide?: CityGuide | null,
-  taste?: Taste
+  taste?: Taste,
+  revisitCount = 0
 ): string {
   const prefLabels = prefs
     .map((p) => PREF_OPTIONS.find((o) => o.key === p)?.label)
@@ -535,6 +559,8 @@ function buildSummary(
   if (prefLabels) parts.push(`偏好：${prefLabels}`)
   // 个性化画像起效时向用户交代（没交代会像「随机改了行程」；样本不足时 brief 为空不出现）
   if (taste?.brief) parts.push(`按你的足迹：${taste.brief}`)
+  // 重访降权起效时交代（用户能看到「为什么熟悉的点没排前面」）
+  if (revisitCount > 0) parts.push(`避开你打卡过的 ${revisitCount} 个点`)
   const source = guide ? ` · 参考${guide.source}` : ''
   parts.push(`共 ${items.length} 个安排${source}`)
   if (!known) {
