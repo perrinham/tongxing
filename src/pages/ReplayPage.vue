@@ -343,8 +343,6 @@ onLoad((options: Record<string, any> | undefined) => {
 .page {
   min-height: 100vh;
   background: var(--bg-page);
-  display: flex;
-  flex-direction: column;
 }
 
 .center-hint {
@@ -355,18 +353,18 @@ onLoad((options: Record<string, any> | undefined) => {
 }
 
 .replay-body {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
+  display: block;
 }
 
 .map-wrap {
-  flex: 1;
-  min-height: 320px;
+  /* 显式 vh 高度，不给 flex 百分比机会 —— 原生 map 组件在真机上对
+     「百分比/弹性高度」解析不可靠（devtools 宽松、真机算成 0 就是整片白），
+     MapPage 同款写法（46vh），这里回放给大一档。 */
+  position: relative;
+  height: 58vh;
+  margin: 10px 14px 0;
   border-radius: 14px;
   overflow: hidden;
-  margin: 10px 14px 0;
   background: var(--bg-card);
 }
 
