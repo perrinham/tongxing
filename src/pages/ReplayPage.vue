@@ -118,6 +118,11 @@ const markers = computed(() =>
   })
 )
 
+// ── 地图高度：真机上原生 map 不吃 vh/百分比（会退回默认 ~150px，只画出一角），
+// 用显式 px —— 运行时按窗口高算，devtools 与真机一致。 ──
+const sysH = (uni.getSystemInfoSync().windowHeight as number) || 812
+const mapH = Math.max(360, Math.round(sysH * 0.58))
+
 const subtitle = computed(() => replaySubtitle(current.value))
 const atEnd = computed(() => cursor.value >= steps.value.length - 1)
 
@@ -272,7 +277,7 @@ onLoad((options: Record<string, any> | undefined) => {
 
     <template v-else>
       <div class="replay-body">
-        <div class="map-wrap">
+        <div class="map-wrap" :style="{ height: mapH + 'px' }">
           <map
             class="map"
             :latitude="startPoint.latitude"
@@ -357,11 +362,8 @@ onLoad((options: Record<string, any> | undefined) => {
 }
 
 .map-wrap {
-  /* 显式 vh 高度，不给 flex 百分比机会 —— 原生 map 组件在真机上对
-     「百分比/弹性高度」解析不可靠（devtools 宽松、真机算成 0 就是整片白），
-     MapPage 同款写法（46vh），这里回放给大一档。 */
+  /* 高度由脚本给 px（真机原生组件不吃 vh/百分比，见脚本注释） */
   position: relative;
-  height: 58vh;
   margin: 10px 14px 0;
   border-radius: 14px;
   overflow: hidden;
