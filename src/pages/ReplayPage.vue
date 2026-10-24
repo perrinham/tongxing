@@ -12,6 +12,7 @@ import {
   replayPosterData,
   replayPosterHeight,
   replaySubtitle,
+  stepDistanceM,
   type LatLng,
   type ReplayPosterData,
   type ReplayStep
@@ -102,22 +103,30 @@ const polylineFor = computed(() =>
     : []
 )
 
-/** 逐段「上一步走了多远」：步距米数 + 分钟，路线没回来时不显示 */
-const legMeta = ref<{ m: number; min: number } | null>(null)
+/** 逐段「上一步走了多远」：步距米数 + 分钟；approx = 直线估算（路线接口没拿到时） */
+const legMeta = ref<{ m: number; min: number; approx: boolean } | null>(null)
 
 // 路线段缓存：key = 目的站 id（「进到这一站的那一步」的路线）；[] = 已试过、拿不到（直线兜底）
 const routeSegs = new Map<string, LatLng[]>()
-const routeMeta = new Map<string, { m: number; min: number }>()
+const routeMeta = new Map<string, { m: number; min: number; approx: boolean }>()
 const routePending = new Set<string>()
 // 路线请求代数：连点/快进时旧响应晚回来不得覆盖新游标（MapPage 同款约定）
 let routeSeq = 0
 
-/** 拉取「进到当前站」的真实步行路线；拿不到就让直线兜底 */
+/** 拉取「进到当前站」的真实步行路线；拿不到（真机合法域名未放行/限流/失败）
+ *  就用直线距离估算步距兜底 —— 步距小字必须一直有。 */
 async function ensureRouteInto(s: ReplayStep) {
   if (s.posInDay <= 0 || routeSegs.has(s.id) || routePending.has(s.id)) {
     rebuild()
     return
   }
+  // 先立刻给直线估算（高德没回包/不可用时的保底展示）
+  const dayPts0 = steps.value.filter((x) => x.dayNo === s.dayNo)
+  const prev0 = dayPts0[s.posInDay - 1]
+  const straightM = stepDistanceM(prev0, s)
+  routeMeta.set(s.id, { m: straightM, min: Math.max(1, Math.round(straightM / 80)), approx: true })
+  rebuild()
+
   routePending.add(s.id)
   const seq = ++routeSeq
   const dayPts = steps.value.filter((x) => x.dayNo === s.dayNo)
@@ -132,7 +141,8 @@ async function ensureRouteInto(s: ReplayStep) {
       routeSegs.set(s.id, r.points.slice(1)) // 首点与上一站重合
       routeMeta.set(s.id, {
         m: Math.round(r.distance),
-        min: Math.max(1, Math.round(r.duration / 60))
+        min: Math.max(1, Math.round(r.duration / 60)),
+        approx: false
       })
     } else {
       routeSegs.set(s.id, [])
@@ -161,9 +171,14 @@ watch(current, (cur) => {
 const legText = computed(() => {
   const m = legMeta.value
   if (!m) return ''
-  return m.m >= 1000
-    ? `上一步 ${(m.m / 1000).toFixed(1)}km · ${m.min} 分钟`
-    : `上一步 ${m.m}m · ${m.min} 分钟`
+  const dist = m.approx
+    ? m.m >= 1000
+      ? `约 ${(m.m / 1000).toFixed(1)}km（直线）`
+      : `约 ${m.m}m（直线）`
+    : m.m >= 1000
+      ? `${(m.m / 1000).toFixed(1)}km`
+      : `${m.m}m`
+  return `上一步步行 ${dist} · 约 ${Math.max(1, m.min)} 分钟`
 })
 
 /** marker：全程的点都摆上（当天序号绿章，别天 D 章）。

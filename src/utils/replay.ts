@@ -162,6 +162,14 @@ export function kmLabel(km: number): string {
   return km < 1 ? `${Math.round(km * 1000)}m` : `${km.toFixed(km < 10 ? 1 : 0)}km`
 }
 
+/** 两站直线距离（米）。路线接口不可用时的「上一步」步距估算兜底用 */
+export function stepDistanceM(
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number }
+): number {
+  return Math.round(havKm(a, b) * 1000)
+}
+
 /** 海报数据 + 绘制（纯排版：原生 map 组件截不了图，见文件头） */
 export interface ReplayPosterData {
   title: string
