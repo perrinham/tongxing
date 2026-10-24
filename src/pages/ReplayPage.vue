@@ -27,7 +27,10 @@ const P = CANVAS_PALETTE
 
 const store = useTripStore()
 
-const space = ref<TripSpaceFull | null>(null)
+const tripId = ref('')
+/** 数据来源：本地行程优先（从未推云的本机行程没有空间记录），云端 getSpace 只兜底 */
+const fromLocal = ref(false)
+const spaceDoc = ref<TripSpaceFull['doc'] | null>(null)
 const loading = ref(true)
 const errorText = ref('')
 
@@ -38,13 +41,25 @@ onUnmounted(() => {
   stopTimer()
 })
 
-const trip = computed(() => space.value?.doc.trip || null)
-const days = computed<Day[]>(() => [...(space.value?.doc.days || [])].sort((a, b) => a.index - b.index))
+const trip = computed(() =>
+  fromLocal.value
+    ? store.trips.find((t) => t.id === tripId.value) || null
+    : spaceDoc.value?.trip || null
+)
+const days = computed<Day[]>(() =>
+  fromLocal.value
+    ? [...store.daysOf(tripId.value)].sort((a, b) => a.index - b.index)
+    : [...(spaceDoc.value?.days || [])].sort((a, b) => a.index - b.index)
+)
+const items = computed(() =>
+  fromLocal.value ? store.itemsOf(tripId.value) : spaceDoc.value?.items || []
+)
+const memberCount = computed(() =>
+  fromLocal.value ? store.membersOf(tripId.value).length : spaceDoc.value?.members.length || 0
+)
 
 /** 全程回放轨道（带坐标项；无坐标的静默跳过） */
-const steps = computed(() =>
-  space.value ? buildReplaySteps(days.value, space.value.doc.items || []) : []
-)
+const steps = computed(() => buildReplaySteps(days.value, items.value))
 
 /** 游标：steps 里的全局下标。0 = 第一站；length-1 = 末站 */
 const cursor = ref(0)
@@ -169,11 +184,11 @@ const posterData = ref<ReplayPosterData | null>(null)
 const posterRef = ref<InstanceType<typeof PosterCanvas> | null>(null)
 
 function makePoster() {
-  if (!trip.value || !space.value) return
+  if (!trip.value) return
   posterData.value = replayPosterData(
     trip.value,
-    dayBriefs(days.value, space.value.doc.items || []),
-    space.value.doc.members.length
+    dayBriefs(days.value, items.value),
+    memberCount.value
   )
   showPoster.value = true
 }
@@ -202,23 +217,37 @@ function showToast(text: string) {
   toastTimer = setTimeout(() => (toastShow.value = false), 1800)
 }
 
-onLoad(async (options: Record<string, any> | undefined) => {
+onLoad((options: Record<string, any> | undefined) => {
   const id = String(options?.id || '')
   if (!id) {
     errorText.value = '缺少行程 id'
     loading.value = false
     return
   }
-  try {
-    const r = await store.api().getSpace(id)
-    if (!alive) return
-    space.value = r.space
-  } catch (e) {
-    if (!alive) return
-    errorText.value = e instanceof Error ? e.message : '加载失败'
-  } finally {
-    if (alive) loading.value = false
+  tripId.value = id
+  const local = store.trips.find((t) => t.id === id)
+  if (local) {
+    // 本机行程（含从未推云的）：直接吃本地 store，实时反映编辑
+    fromLocal.value = true
+    loading.value = false
+    return
   }
+  // 云空间兜底（「发现」/分享进入的只读行程）
+  store
+    .api()
+    .getSpace(id)
+    .then((r) => {
+      if (!alive) return
+      spaceDoc.value = r.space?.doc || null
+      if (!spaceDoc.value) errorText.value = '这个行程没有内容'
+    })
+    .catch((e) => {
+      if (!alive) return
+      errorText.value = e instanceof Error ? e.message : '加载失败'
+    })
+    .finally(() => {
+      if (alive) loading.value = false
+    })
 })
 </script>
 
