@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { useTripStore } from '@/stores/trip'
 import { CANVAS_PALETTE } from '@/utils/format'
-import { walkingRoute } from '@/services/amap'
 import {
   buildReplaySteps,
   dayBriefs,
@@ -12,10 +11,9 @@ import {
   replayPosterData,
   replayPosterHeight,
   replaySubtitle,
+  sequencePolyline,
   stepDistanceM,
-  type LatLng,
-  type ReplayPosterData,
-  type ReplayStep
+  type ReplayPosterData
 } from '@/utils/replay'
 import AppNav from '@/components/AppNav.vue'
 import AppEmpty from '@/components/AppEmpty.vue'
@@ -74,28 +72,10 @@ const current = computed(() => steps.value[cursor.value] || null)
 const dayNo = computed(() => current.value?.dayNo ?? 0)
 const dayCount = computed(() => days.value.length)
 
-/** 地图连线：优先逐段真实步行路线（services/amap.walkingRoute），路线没回来用直线兜底 */
-const linePts = ref<LatLng[]>([])
-
-function rebuildLine() {
-  const cur = current.value
-  if (!cur) {
-    linePts.value = []
-    return
-  }
-  const dayPts = steps.value.filter((s) => s.dayNo === cur.dayNo)
-  if (!dayPts.length) {
-    linePts.value = []
-    return
-  }
-  const pts: LatLng[] = [{ latitude: dayPts[0].lat, longitude: dayPts[0].lng }]
-  for (let p = 1; p <= cur.posInDay; p += 1) {
-    const seg = routeSegs.get(dayPts[p].id) || []
-    if (seg.length) pts.push(...seg)
-    else pts.push({ latitude: dayPts[p].lat, longitude: dayPts[p].lng })
-  }
-  linePts.value = pts
-}
+/** 地图连线：当天已走过的一段（站点直线，逐段串联） */
+const linePts = computed(() =>
+  current.value ? sequencePolyline(steps.value, current.value.dayNo, current.value.posInDay) : []
+)
 
 const polylineFor = computed(() =>
   linePts.value.length >= 2
@@ -103,82 +83,16 @@ const polylineFor = computed(() =>
     : []
 )
 
-/** 逐段「上一步走了多远」：步距米数 + 分钟；approx = 直线估算（路线接口没拿到时） */
-const legMeta = ref<{ m: number; min: number; approx: boolean } | null>(null)
-
-// 路线段缓存：key = 目的站 id（「进到这一站的那一步」的路线）；[] = 已试过、拿不到（直线兜底）
-const routeSegs = new Map<string, LatLng[]>()
-const routeMeta = new Map<string, { m: number; min: number; approx: boolean }>()
-const routePending = new Set<string>()
-// 路线请求代数：连点/快进时旧响应晚回来不得覆盖新游标（MapPage 同款约定）
-let routeSeq = 0
-
-/** 拉取「进到当前站」的真实步行路线；拿不到（真机合法域名未放行/限流/失败）
- *  就用直线距离估算步距兜底 —— 步距小字必须一直有。 */
-async function ensureRouteInto(s: ReplayStep) {
-  if (s.posInDay <= 0 || routeSegs.has(s.id) || routePending.has(s.id)) {
-    rebuild()
-    return
-  }
-  // 先立刻给直线估算（高德没回包/不可用时的保底展示）
-  const dayPts0 = steps.value.filter((x) => x.dayNo === s.dayNo)
-  const prev0 = dayPts0[s.posInDay - 1]
-  const straightM = stepDistanceM(prev0, s)
-  routeMeta.set(s.id, { m: straightM, min: Math.max(1, Math.round(straightM / 80)), approx: true })
-  rebuild()
-
-  routePending.add(s.id)
-  const seq = ++routeSeq
-  const dayPts = steps.value.filter((x) => x.dayNo === s.dayNo)
-  const prev = dayPts[s.posInDay - 1]
-  try {
-    const r = await walkingRoute(
-      { latitude: prev.lat, longitude: prev.lng },
-      { latitude: s.lat, longitude: s.lng }
-    )
-    if (seq !== routeSeq) return
-    if (r && r.points.length >= 2) {
-      routeSegs.set(s.id, r.points.slice(1)) // 首点与上一站重合
-      routeMeta.set(s.id, {
-        m: Math.round(r.distance),
-        min: Math.max(1, Math.round(r.duration / 60)),
-        approx: false
-      })
-    } else {
-      routeSegs.set(s.id, [])
-    }
-  } catch {
-    if (seq === routeSeq) routeSegs.set(s.id, [])
-  } finally {
-    routePending.delete(s.id)
-    if (seq === routeSeq) rebuild()
-  }
-}
-
-function rebuild() {
-  rebuildLine()
-  const cur = current.value
-  legMeta.value = cur ? routeMeta.get(cur.id) || null : null
-}
-
-// 游标变化：先按缓存立刻重画（直线兜底），再去要真实路线
-watch(current, (cur) => {
-  rebuild()
-  if (cur) void ensureRouteInto(cur)
-})
-
-/** 字幕补充：「上一步步行约 X m · Y 分钟」（路线没回来时不显示） */
+/** 「上一步」步距：纯本地球面距离估算（80m/min 步速），不依赖任何外部接口 */
 const legText = computed(() => {
-  const m = legMeta.value
-  if (!m) return ''
-  const dist = m.approx
-    ? m.m >= 1000
-      ? `约 ${(m.m / 1000).toFixed(1)}km（直线）`
-      : `约 ${m.m}m（直线）`
-    : m.m >= 1000
-      ? `${(m.m / 1000).toFixed(1)}km`
-      : `${m.m}m`
-  return `上一步步行 ${dist} · 约 ${Math.max(1, m.min)} 分钟`
+  const cur = current.value
+  if (!cur || cur.posInDay <= 0) return ''
+  const dayPts = steps.value.filter((s) => s.dayNo === cur.dayNo)
+  const prev = dayPts[cur.posInDay - 1]
+  if (!prev) return ''
+  const m = stepDistanceM(prev, cur)
+  const dist = m >= 1000 ? `${(m / 1000).toFixed(1)}km` : `${m}m`
+  return `上一步约 ${dist} · 步行约 ${Math.max(1, Math.round(m / 80))} 分钟`
 })
 
 /** marker：全程的点都摆上（当天序号绿章，别天 D 章）。

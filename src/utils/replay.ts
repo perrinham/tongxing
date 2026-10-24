@@ -162,7 +162,7 @@ export function kmLabel(km: number): string {
   return km < 1 ? `${Math.round(km * 1000)}m` : `${km.toFixed(km < 10 ? 1 : 0)}km`
 }
 
-/** 两站直线距离（米）。路线接口不可用时的「上一步」步距估算兜底用 */
+/** 两站直线距离（米）。回放页「上一步」步距用（纯本地估算，不依赖任何路线接口） */
 export function stepDistanceM(
   a: { lat: number; lng: number },
   b: { lat: number; lng: number }
