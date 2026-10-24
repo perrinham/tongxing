@@ -83,20 +83,14 @@ const polylineFor = computed(() =>
     : []
 )
 
-/** 镜头跟着走过的一段收窄，突出「正在走的这一段」 */
-const includePoints = computed(() => {
-  if (!current.value) return []
-  if (visitedLine.value.length >= 2) return visitedLine.value
-  return [{ latitude: current.value.lat, longitude: current.value.lng }]
-})
-
-/** marker：全程的点都摆上（当天序号绿章，别天 D 章），当前点强调橙 */
+/** marker：全程的点都摆上（当天序号绿章，别天 D 章）。
+ *  ⚠️ 只依赖天不依赖游标 —— 真机上每 2s 重建整组 marker 会把原生地图层
+ *  搅出渲染残渣（devtools 看不出来），当前点由字幕与进度表达。 */
 const markers = computed(() =>
   steps.value.map((s, i) => {
-    const isCur = i === cursor.value
     const inDay = s.dayNo === dayNo.value
-    const bg = isCur ? P.accent : inDay ? P.brand : P.bgCard
-    const content = isCur ? '这里' : inDay ? String(s.posInDay + 1) : `D${s.dayNo + 1}`
+    const bg = inDay ? P.brand : P.bgCard
+    const content = inDay ? String(s.posInDay + 1) : `D${s.dayNo + 1}`
     return {
       id: i,
       latitude: s.lat,
@@ -105,10 +99,10 @@ const markers = computed(() =>
       height: 24,
       label: {
         content,
-        color: isCur || inDay ? '#FFFFFF' : P.textPrimary,
+        color: inDay ? '#FFFFFF' : P.textPrimary,
         bgColor: bg,
         fontSize: 12,
-        padding: inDay || isCur ? 5 : 4,
+        padding: inDay ? 5 : 4,
         borderRadius: 10,
         textAlign: 'center' as const,
         anchorX: 0,
@@ -118,17 +112,20 @@ const markers = computed(() =>
   })
 )
 
-// ── 地图高度：真机上原生 map 不吃 vh/百分比（会退回默认 ~150px，只画出一角），
-// 用显式 px —— 运行时按窗口高算，devtools 与真机一致。 ──
-const sysH = (uni.getSystemInfoSync().windowHeight as number) || 812
-const mapH = Math.max(360, Math.round(sysH * 0.58))
+// ── 地图尺寸：真机上原生 map 不吃 vh/百分比（会退回默认 ~150px，只画一角），
+// 用运行时算好的显式 px，宽高双份下到 map 元素本体 ──
+const sysInfo = uni.getSystemInfoSync()
+const sysH = (sysInfo.windowHeight as number) || 812
+const sysW = (sysInfo.windowWidth as number) || 375
+const mapH = Math.max(360, Math.round(sysH * 0.56))
+const mapW = Math.max(280, sysW - 28) // 与 .map-wrap 的左右边距 14px 同步
 
 const subtitle = computed(() => replaySubtitle(current.value))
 const atEnd = computed(() => cursor.value >= steps.value.length - 1)
 
-/** 地图初始中心（常量，镜头此后由 include-points 接管，避免两者打架） */
-const startPoint = computed(() => {
-  const s = steps.value[0]
+/** 当天中心点：切天换心，播放中不动镜头（对齐 MapPage 的静态中心 + scale 口径） */
+const dayCenter = computed(() => {
+  const s = steps.value.find((x) => x.dayNo === dayNo.value) || steps.value[0]
   return s ? { latitude: s.lat, longitude: s.lng } : { latitude: 34.0, longitude: 108.0 }
 })
 
@@ -280,15 +277,12 @@ onLoad((options: Record<string, any> | undefined) => {
         <div class="map-wrap" :style="{ height: mapH + 'px' }">
           <map
             class="map"
-            :latitude="startPoint.latitude"
-            :longitude="startPoint.longitude"
-            :scale="13"
+            :style="{ width: mapW + 'px', height: mapH + 'px' }"
+            :latitude="dayCenter.latitude"
+            :longitude="dayCenter.longitude"
+            :scale="14"
             :markers="markers"
             :polyline="polylineFor"
-            :include-points="includePoints"
-            :include-padding="[64, 64, 96, 64]"
-            enable-poi
-            enable-building
           />
         </div>
 
@@ -362,7 +356,7 @@ onLoad((options: Record<string, any> | undefined) => {
 }
 
 .map-wrap {
-  /* 高度由脚本给 px（真机原生组件不吃 vh/百分比，见脚本注释） */
+  /* px 尺寸由脚本给（见脚本注释）；圆角/裁切与 MapPage 同口径 */
   position: relative;
   margin: 10px 14px 0;
   border-radius: 14px;
