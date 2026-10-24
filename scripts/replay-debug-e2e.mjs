@@ -146,6 +146,23 @@ async function main() {
     console.log('· 没找到播放钮（可能已自动播放）')
   }
 
+  // 真实步行路线验证：等路线回包后，页面里候选连线点数应明显多于直线（直线 ≤ 站数）
+  await sleep(5000)
+  const d2 = await page.data()
+  let maxPts = 0
+  for (const v of Object.values(d2 || {})) {
+    // 连线顶点可能直接是 {latitude,longitude} 数组，也可能藏在 polyline 的 points 字段里
+    if (Array.isArray(v) && v.length && typeof v[0] === 'object' && v[0]) {
+      if ('latitude' in v[0] && 'longitude' in v[0] && Object.keys(v[0]).length === 2) {
+        maxPts = Math.max(maxPts, v.length)
+      } else if ('points' in v[0] && Array.isArray(v[0].points)) {
+        maxPts = Math.max(maxPts, v[0].points.length)
+      }
+    }
+  }
+  console.log(`· 地图连线点数上限：${maxPts}（直线兜底应 ≤ 4，真实路线通常几十）`)
+  if (maxPts <= 4) console.log('  ⚠️ 未命中真实步行路线（检查 VITE_AMAP_WEB_KEY / 限流）')
+
   console.log('\n===== 控制台消息（全部） =====')
   consoleMsgs.forEach((m) => console.log(m))
 

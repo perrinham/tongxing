@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { onLoad } from '@dcloudio/uni-app'
 import { useTripStore } from '@/stores/trip'
 import { CANVAS_PALETTE } from '@/utils/format'
+import { walkingRoute } from '@/services/amap'
 import {
   buildReplaySteps,
   dayBriefs,
@@ -11,8 +12,9 @@ import {
   replayPosterData,
   replayPosterHeight,
   replaySubtitle,
-  sequencePolyline,
-  type ReplayPosterData
+  type LatLng,
+  type ReplayPosterData,
+  type ReplayStep
 } from '@/utils/replay'
 import AppNav from '@/components/AppNav.vue'
 import AppEmpty from '@/components/AppEmpty.vue'
@@ -71,17 +73,98 @@ const current = computed(() => steps.value[cursor.value] || null)
 const dayNo = computed(() => current.value?.dayNo ?? 0)
 const dayCount = computed(() => days.value.length)
 
-/** 已走过的一段（当天 0..posInDay）—— 地图上「长出来的」绿色轨迹 */
-const visitedLine = computed(() =>
-  current.value ? sequencePolyline(steps.value, current.value.dayNo, current.value.posInDay) : []
-)
+/** 地图连线：优先逐段真实步行路线（services/amap.walkingRoute），路线没回来用直线兜底 */
+const linePts = ref<LatLng[]>([])
 
-/** 地图连线（脚本里造对象，模板只绑变量 —— wx polyline 对象字面量放模板里解析不了） */
+function rebuildLine() {
+  const cur = current.value
+  if (!cur) {
+    linePts.value = []
+    return
+  }
+  const dayPts = steps.value.filter((s) => s.dayNo === cur.dayNo)
+  if (!dayPts.length) {
+    linePts.value = []
+    return
+  }
+  const pts: LatLng[] = [{ latitude: dayPts[0].lat, longitude: dayPts[0].lng }]
+  for (let p = 1; p <= cur.posInDay; p += 1) {
+    const seg = routeSegs.get(dayPts[p].id) || []
+    if (seg.length) pts.push(...seg)
+    else pts.push({ latitude: dayPts[p].lat, longitude: dayPts[p].lng })
+  }
+  linePts.value = pts
+}
+
 const polylineFor = computed(() =>
-  visitedLine.value.length
-    ? [{ points: visitedLine.value, color: P.brand, width: 5, arrowLine: true }]
+  linePts.value.length >= 2
+    ? [{ points: linePts.value, color: P.brand, width: 5, arrowLine: true }]
     : []
 )
+
+/** 逐段「上一步走了多远」：步距米数 + 分钟，路线没回来时不显示 */
+const legMeta = ref<{ m: number; min: number } | null>(null)
+
+// 路线段缓存：key = 目的站 id（「进到这一站的那一步」的路线）；[] = 已试过、拿不到（直线兜底）
+const routeSegs = new Map<string, LatLng[]>()
+const routeMeta = new Map<string, { m: number; min: number }>()
+const routePending = new Set<string>()
+// 路线请求代数：连点/快进时旧响应晚回来不得覆盖新游标（MapPage 同款约定）
+let routeSeq = 0
+
+/** 拉取「进到当前站」的真实步行路线；拿不到就让直线兜底 */
+async function ensureRouteInto(s: ReplayStep) {
+  if (s.posInDay <= 0 || routeSegs.has(s.id) || routePending.has(s.id)) {
+    rebuild()
+    return
+  }
+  routePending.add(s.id)
+  const seq = ++routeSeq
+  const dayPts = steps.value.filter((x) => x.dayNo === s.dayNo)
+  const prev = dayPts[s.posInDay - 1]
+  try {
+    const r = await walkingRoute(
+      { latitude: prev.lat, longitude: prev.lng },
+      { latitude: s.lat, longitude: s.lng }
+    )
+    if (seq !== routeSeq) return
+    if (r && r.points.length >= 2) {
+      routeSegs.set(s.id, r.points.slice(1)) // 首点与上一站重合
+      routeMeta.set(s.id, {
+        m: Math.round(r.distance),
+        min: Math.max(1, Math.round(r.duration / 60))
+      })
+    } else {
+      routeSegs.set(s.id, [])
+    }
+  } catch {
+    if (seq === routeSeq) routeSegs.set(s.id, [])
+  } finally {
+    routePending.delete(s.id)
+    if (seq === routeSeq) rebuild()
+  }
+}
+
+function rebuild() {
+  rebuildLine()
+  const cur = current.value
+  legMeta.value = cur ? routeMeta.get(cur.id) || null : null
+}
+
+// 游标变化：先按缓存立刻重画（直线兜底），再去要真实路线
+watch(current, (cur) => {
+  rebuild()
+  if (cur) void ensureRouteInto(cur)
+})
+
+/** 字幕补充：「上一步步行约 X m · Y 分钟」（路线没回来时不显示） */
+const legText = computed(() => {
+  const m = legMeta.value
+  if (!m) return ''
+  return m.m >= 1000
+    ? `上一步 ${(m.m / 1000).toFixed(1)}km · ${m.min} 分钟`
+    : `上一步 ${m.m}m · ${m.min} 分钟`
+})
 
 /** marker：全程的点都摆上（当天序号绿章，别天 D 章）。
  *  ⚠️ 只依赖天不依赖游标 —— 真机上每 2s 重建整组 marker 会把原生地图层
@@ -302,6 +385,7 @@ onLoad((options: Record<string, any> | undefined) => {
         <!-- 字幕 + 控制 -->
         <div class="bar">
           <p class="subtitle">{{ subtitle }}</p>
+          <p v-if="legText" class="leg">{{ legText }}</p>
           <div class="ctrl-row">
             <button class="ctrl-btn tint" :disabled="cursor === 0" @click="rewind">上一站</button>
             <button class="play-btn" @click="atEnd ? restart() : togglePlay()">
@@ -404,7 +488,13 @@ onLoad((options: Record<string, any> | undefined) => {
   font-size: 16px;
   font-weight: 600;
   color: var(--text-primary);
-  padding: 2px 2px 10px;
+  padding: 2px 2px 0;
+}
+
+.leg {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  padding: 0 2px 10px;
 }
 
 .ctrl-row {
